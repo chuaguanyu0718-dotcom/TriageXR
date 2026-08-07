@@ -1,8 +1,6 @@
 # TriageXR
 
-<<<<<<< HEAD
-This is Apple Projectdsss dd
-=======
+
 TriageXR is a spatial mass-casualty triage training application for Apple Vision Pro. It places trainees inside an interactive emergency scenario where they assess casualties, assign triage priorities and respond to changing patient conditions.
 
 The project is being developed for **Spatial Hack AI 2026**, addressing the brief:
@@ -116,4 +114,3 @@ The current casualty data, priority labels and scenario logic must be reviewed a
 ## Project Status
 
 TriageXR is under active development. The current release demonstrates the foundational spatial experience rather than a complete training system.
->>>>>>> f9f04fe9c4a87229ca5c0d5d34f3a8350c1716e7
