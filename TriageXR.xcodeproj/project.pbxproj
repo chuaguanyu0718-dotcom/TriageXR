@@ -32,16 +32,25 @@
 		};
 		A10000000000000000000003 = {
 			isa = PBXGroup;
-			children = (A10000000000000000000009, A10000000000000000000004);
+			children = (A10000000000000000000009, A10000000000000000000016, A10000000000000000000004);
 			sourceTree = "<group>";
 		};
 		A10000000000000000000004 /* Products */ = { isa = PBXGroup; children = (A10000000000000000000005); name = Products; sourceTree = "<group>"; };
 		A10000000000000000000005 /* TriageXR.app */ = { isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = TriageXR.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		A10000000000000000000006 /* Sources */ = { isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (A1000000000000000000000A); runOnlyForDeploymentPostprocessing = 0; };
 		A10000000000000000000007 /* Frameworks */ = { isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
-		A10000000000000000000008 /* Resources */ = { isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+		A10000000000000000000008 /* Resources */ = { isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (A1000000000000000000001B, A1000000000000000000001C, A1000000000000000000001D, A1000000000000000000001E); runOnlyForDeploymentPostprocessing = 0; };
 		A10000000000000000000009 /* ContentView.swift */ = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
+		A10000000000000000000016 /* Models */ = { isa = PBXGroup; children = (A10000000000000000000017, A10000000000000000000018, A10000000000000000000019, A1000000000000000000001A); path = Models; sourceTree = "<group>"; };
+		A10000000000000000000017 /* CasualtyAlex.usdz */ = { isa = PBXFileReference; lastKnownFileType = file.usdz; path = CasualtyAlex.usdz; sourceTree = "<group>"; };
+		A10000000000000000000018 /* CasualtyJordan.usdz */ = { isa = PBXFileReference; lastKnownFileType = file.usdz; path = CasualtyJordan.usdz; sourceTree = "<group>"; };
+		A10000000000000000000019 /* CasualtySam.usdz */ = { isa = PBXFileReference; lastKnownFileType = file.usdz; path = CasualtySam.usdz; sourceTree = "<group>"; };
+		A1000000000000000000001A /* CollisionVehicle.usdz */ = { isa = PBXFileReference; lastKnownFileType = file.usdz; path = CollisionVehicle.usdz; sourceTree = "<group>"; };
 		A1000000000000000000000A /* ContentView.swift in Sources */ = { isa = PBXBuildFile; fileRef = A10000000000000000000009; };
+		A1000000000000000000001B /* CasualtyAlex.usdz in Resources */ = { isa = PBXBuildFile; fileRef = A10000000000000000000017; };
+		A1000000000000000000001C /* CasualtyJordan.usdz in Resources */ = { isa = PBXBuildFile; fileRef = A10000000000000000000018; };
+		A1000000000000000000001D /* CasualtySam.usdz in Resources */ = { isa = PBXBuildFile; fileRef = A10000000000000000000019; };
+		A1000000000000000000001E /* CollisionVehicle.usdz in Resources */ = { isa = PBXBuildFile; fileRef = A1000000000000000000001A; };
 		A10000000000000000000010 /* Project config */ = { isa = XCConfigurationList; buildConfigurations = (A10000000000000000000012, A10000000000000000000013); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
 		A10000000000000000000011 /* Target config */ = { isa = XCConfigurationList; buildConfigurations = (A10000000000000000000014, A10000000000000000000015); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
 		A10000000000000000000012 /* Debug */ = { isa = XCBuildConfiguration; buildSettings = { CLANG_ENABLE_MODULES = YES; CLANG_ENABLE_OBJC_ARC = YES; SWIFT_VERSION = 5.0; }; name = Debug; };

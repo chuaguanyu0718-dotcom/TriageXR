@@ -25,3 +25,8 @@ The experience follows the product storyboard:
 The yellow fuel spill is interactive. After identifying it, use the incident panel to report it and request resources.
 
 The initial coach runs locally from the structured event log. This keeps feedback deterministic and testable; a hosted language model can later rewrite the verified findings without becoming the source of truth.
+
+## 3D assets
+
+The immersive scene includes optimized USDZ derivatives of openly licensed casualty and vehicle models.
+See [ASSET_ATTRIBUTION.md](ASSET_ATTRIBUTION.md) for source and license details.

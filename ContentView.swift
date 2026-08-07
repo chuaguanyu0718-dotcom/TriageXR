@@ -689,7 +689,7 @@ struct ImmersiveTriageView: View {
 
     var body: some View {
         RealityView { content, attachments in
-            content.add(makeScene())
+            content.add(await makeScene())
             if let controls = attachments.entity(for: "controls") {
                 controls.position = controlPosition
                 content.add(controls)
@@ -757,7 +757,7 @@ struct ImmersiveTriageView: View {
         }
     }
 
-    private func makeScene() -> Entity {
+    private func makeScene() async -> Entity {
         let root = Entity()
         root.name = "scene-root"
 
@@ -772,21 +772,35 @@ struct ImmersiveTriageView: View {
         roadLine.position = [0, -1.33, -3.1]
         root.addChild(roadLine)
 
-        root.addChild(makeVehicle(position: [-2.4, -0.75, -4.2], colour: .systemBlue, rotation: -0.22))
-        root.addChild(makeVehicle(position: [2.0, -0.75, -4.4], colour: .darkGray, rotation: 0.3))
+        root.addChild(await makeVehicle(position: [-2.4, -1.28, -4.2], rotation: -0.22))
+        root.addChild(await makeVehicle(position: [2.0, -1.28, -4.4], rotation: 0.3))
 
-        root.addChild(makeCasualty(id: "casualty-a", locatorColour: .systemBlue, position: [-1.55, -1.08, -2.25]))
-        root.addChild(makeCasualty(id: "casualty-b", locatorColour: .systemPurple, position: [0.1, -1.08, -3.15]))
-        root.addChild(makeCasualty(id: "casualty-c", locatorColour: .systemTeal, position: [1.55, -1.08, -2.2]))
+        root.addChild(await makeCasualty(id: "casualty-a", assetName: "CasualtyAlex", locatorColour: .systemBlue, position: [-1.55, -1.08, -2.25]))
+        root.addChild(await makeCasualty(id: "casualty-b", assetName: "CasualtyJordan", locatorColour: .systemPurple, position: [0.1, -1.08, -3.15]))
+        root.addChild(await makeCasualty(id: "casualty-c", assetName: "CasualtySam", locatorColour: .systemTeal, position: [1.55, -1.08, -2.2]))
         root.addChild(makeHazard())
         return root
     }
 
-    private func makeVehicle(position: SIMD3<Float>, colour: UIColor, rotation: Float) -> Entity {
+    private func sceneAsset(named name: String) async -> Entity? {
+        try? await Entity(named: name, in: .main)
+    }
+
+    private func makeVehicle(position: SIMD3<Float>, rotation: Float) async -> Entity {
         let vehicle = Entity()
+        vehicle.name = "vehicle-collision"
         vehicle.position = position
         vehicle.orientation = simd_quatf(angle: rotation, axis: [0, 1, 0])
-        let body = ModelEntity(mesh: .generateBox(width: 1.7, height: 0.75, depth: 0.85, cornerRadius: 0.12), materials: [SimpleMaterial(color: colour, isMetallic: true)])
+
+        if let asset = await sceneAsset(named: "CollisionVehicle") {
+            asset.scale = [0.42, 0.42, 0.42]
+            asset.position = [0, 0.08, 0]
+            vehicle.addChild(asset)
+            return vehicle
+        }
+
+        vehicle.position.y += 0.53
+        let body = ModelEntity(mesh: .generateBox(width: 1.7, height: 0.75, depth: 0.85, cornerRadius: 0.12), materials: [SimpleMaterial(color: .darkGray, isMetallic: true)])
         vehicle.addChild(body)
         for x: Float in [-0.55, 0.55] {
             for z: Float in [-0.47, 0.47] {
@@ -809,14 +823,48 @@ struct ImmersiveTriageView: View {
         return hazard
     }
 
-    private func makeCasualty(id: String, locatorColour: UIColor, position: SIMD3<Float>) -> Entity {
+    private func makeCasualty(
+        id: String,
+        assetName: String,
+        locatorColour: UIColor,
+        position: SIMD3<Float>
+    ) async -> Entity {
         let casualty = Entity()
         casualty.name = id
         casualty.position = position
         casualty.components.set(InputTargetComponent())
-        casualty.components.set(CollisionComponent(shapes: [.generateBox(size: [1.65, 0.55, 0.6])]))
+        casualty.components.set(CollisionComponent(shapes: [.generateBox(size: [0.82, 0.65, 1.95])]))
         casualty.components.set(HoverEffectComponent())
 
+        if let asset = await sceneAsset(named: assetName) {
+            asset.position = [0, 0.22, 0]
+            casualty.addChild(asset)
+        } else {
+            addFallbackCasualtyGeometry(to: casualty)
+        }
+
+        let locatorMaterial = SimpleMaterial(color: locatorColour, isMetallic: false)
+        let pole = ModelEntity(mesh: .generateBox(width: 0.025, height: 0.55, depth: 0.025), materials: [locatorMaterial])
+        pole.position = [0, 0.64, 0]
+        let locator = ModelEntity(mesh: .generateSphere(radius: 0.12), materials: [locatorMaterial])
+        locator.position = [0, 0.94, 0]
+        casualty.addChild(pole); casualty.addChild(locator)
+
+        let tag = ModelEntity(mesh: .generateBox(width: 0.3, height: 0.2, depth: 0.025, cornerRadius: 0.025), materials: [SimpleMaterial(color: .white, isMetallic: false)])
+        tag.name = "tag-\(id)"
+        tag.position = [0, 1.18, 0]
+        tag.isEnabled = false
+        casualty.addChild(tag)
+
+        let alert = ModelEntity(mesh: .generateSphere(radius: 0.09), materials: [SimpleMaterial(color: .systemRed, isMetallic: false)])
+        alert.name = "condition-\(id)"
+        alert.position = [0, 0.5, 0]
+        alert.isEnabled = false
+        casualty.addChild(alert)
+        return casualty
+    }
+
+    private func addFallbackCasualtyGeometry(to casualty: Entity) {
         let uniform = SimpleMaterial(color: .systemIndigo, isMetallic: false)
         let skin = SimpleMaterial(color: UIColor(red: 0.72, green: 0.50, blue: 0.38, alpha: 1), isMetallic: false)
         let torso = ModelEntity(mesh: .generateCylinder(height: 0.9, radius: 0.22), materials: [uniform])
@@ -830,25 +878,6 @@ struct ImmersiveTriageView: View {
             leg.position = [0.68, 0, z]
             casualty.addChild(leg)
         }
-        let locatorMaterial = SimpleMaterial(color: locatorColour, isMetallic: false)
-        let pole = ModelEntity(mesh: .generateBox(width: 0.025, height: 0.55, depth: 0.025), materials: [locatorMaterial])
-        pole.position = [0, 0.42, 0]
-        let locator = ModelEntity(mesh: .generateSphere(radius: 0.12), materials: [locatorMaterial])
-        locator.position = [0, 0.72, 0]
-        casualty.addChild(pole); casualty.addChild(locator)
-
-        let tag = ModelEntity(mesh: .generateBox(width: 0.3, height: 0.2, depth: 0.025, cornerRadius: 0.025), materials: [SimpleMaterial(color: .white, isMetallic: false)])
-        tag.name = "tag-\(id)"
-        tag.position = [0, 0.25, 0]
-        tag.isEnabled = false
-        casualty.addChild(tag)
-
-        let alert = ModelEntity(mesh: .generateSphere(radius: 0.09), materials: [SimpleMaterial(color: .systemRed, isMetallic: false)])
-        alert.name = "condition-\(id)"
-        alert.position = [-0.68, 0.38, 0]
-        alert.isEnabled = false
-        casualty.addChild(alert)
-        return casualty
     }
 
     private func uiColour(_ priority: TriagePriority) -> UIColor {
