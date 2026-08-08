@@ -36,7 +36,7 @@ After identifying it, use the incident panel to report it and request resources.
 
 - **Evidence-based replay:** Every material action captures the acting role, visible cues, causal outcome, consequence, and a spatial incident snapshot.
   Failed and urgent events also include a concrete next best action.
-  The debrief provides outcome counts, precise step controls, an interactive timeline, and animated top-down reconstruction instead of a plain event log.
+  The after-action review provides a total score (max 100 points) broken down by Safety, Assessment, Triage, Treatment, and Communication, plus personalised coaching priorities, outcome counts, precise step controls, an interactive timeline, and animated top-down reconstruction instead of a plain event log.
 - **Verified spatial assessment:** On Vision Pro, ARKit hand tracking verifies that the trainee reaches and sustains the correct pose at a casualty's highlighted 3D target.
   The breathing check verifies an open hand from four tracked fingertips, and the perfusion check verifies fingertip pinch distance.
   The Simulator exposes the same assessment sequence through target pinches for repeatable demos.
