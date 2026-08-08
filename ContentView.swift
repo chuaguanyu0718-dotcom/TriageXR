@@ -3,23 +3,43 @@ import RealityKit
 import UIKit
 import AVFoundation
 import Combine
+import ARKit
+import GroupActivities
 
 // MARK: - App
 
 @main
 struct TriageXRApp: App {
-    @StateObject private var session = TrainingSession()
+    @StateObject private var session: TrainingSession
+    @StateObject private var collaboration: IncidentCollaborationCoordinator
+    @StateObject private var spatialAssessment: SpatialAssessmentCoordinator
+
+    init() {
+        let session = TrainingSession()
+        let collaboration = IncidentCollaborationCoordinator(trainingSession: session)
+        let spatialAssessment = SpatialAssessmentCoordinator(trainingSession: session)
+        spatialAssessment.installCommandSubmitter { [weak collaboration] command in
+            collaboration?.submit(command)
+        }
+        _session = StateObject(wrappedValue: session)
+        _collaboration = StateObject(wrappedValue: collaboration)
+        _spatialAssessment = StateObject(wrappedValue: spatialAssessment)
+    }
 
     var body: some SwiftUI.Scene {
         WindowGroup(id: "MainWindow") {
             ContentView()
                 .environmentObject(session)
+                .environmentObject(collaboration)
+                .environmentObject(spatialAssessment)
         }
         .defaultSize(width: 920, height: 720)
 
         ImmersiveSpace(id: "TriageScene") {
             ImmersiveTriageView()
                 .environmentObject(session)
+                .environmentObject(collaboration)
+                .environmentObject(spatialAssessment)
         }
         .immersionStyle(selection: .constant(.mixed), in: .mixed)
     }
@@ -27,37 +47,7 @@ struct TriageXRApp: App {
 
 // MARK: - Domain model
 
-enum ScenarioPhase: String {
-    case briefing = "Briefing"
-    case active = "In progress"
-    case complete = "After-action review"
-}
-
-enum ScenarioRules {
-    static let neurologicalRiskAfter: TimeInterval = 6 * 60
-    static let deathAfter: TimeInterval = 10 * 60
-    static let targetCompressionRate = 110
-    static let minimumDemonstrationCPRDuration: TimeInterval = 10
-    static let primaryAssessments: Set<Assessment> = [.response, .breathing, .perfusion]
-}
-
-enum TriagePriority: String, CaseIterable, Identifiable, Codable {
-    case p1 = "P1"
-    case p2 = "P2"
-    case p3 = "P3"
-    case deceased = "Expectant"
-
-    var id: String { rawValue }
-
-    var title: String {
-        switch self {
-        case .p1: "Immediate"
-        case .p2: "Urgent"
-        case .p3: "Delayed"
-        case .deceased: "Expectant"
-        }
-    }
-
+extension TriagePriority {
     var colour: Color {
         switch self {
         case .p1: .red
@@ -68,168 +58,13 @@ enum TriagePriority: String, CaseIterable, Identifiable, Codable {
     }
 }
 
-enum Assessment: String, CaseIterable, Identifiable, Codable {
-    case response = "Check response"
-    case breathing = "Check breathing"
-    case perfusion = "Check perfusion"
-    case injuries = "Inspect injuries"
-
-    var id: String { rawValue }
-    var icon: String {
-        switch self {
-        case .response: "ear"
-        case .breathing: "lungs.fill"
-        case .perfusion: "heart.text.square.fill"
-        case .injuries: "bandage.fill"
-        }
-    }
-}
-
-enum DeteriorationProfile {
-    case none
-    case untreatedCardiacArrest(
-        neurologicalRiskAfter: TimeInterval,
-        deathAfter: TimeInterval
-    )
-
-    var neurologicalRiskThreshold: TimeInterval? {
-        guard case let .untreatedCardiacArrest(threshold, _) = self else { return nil }
-        return threshold
-    }
-
-    var deathThreshold: TimeInterval? {
-        guard case let .untreatedCardiacArrest(_, threshold) = self else { return nil }
-        return threshold
-    }
-
-    var requiresCPR: Bool {
-        if case .untreatedCardiacArrest = self { return true }
-        return false
-    }
-}
-
-struct Casualty: Identifiable {
-    let id: String
-    let name: String
-    let location: String
-    let initialFindings: [Assessment: String]
-    let deterioratedFindings: [Assessment: String]
-    let correctInitialPriority: TriagePriority
-    let correctDeterioratedPriority: TriagePriority?
-    let initialHealth: Double
-    let deteriorationProfile: DeteriorationProfile
-    var health: Double
-    var completedAssessments: Set<Assessment> = []
-    var assignedPriority: TriagePriority?
-    var isDeteriorated = false
-    var untreatedSeconds: TimeInterval = 0
-    var deteriorationStage = 0
-    var isReceivingCPR = false
-    var effectiveCPRSeconds: TimeInterval = 0
-    var activeCPRBoutSeconds: TimeInterval = 0
-    var cprSessionCount = 0
-    var isDeceased = false
-
-    var primaryAssessmentComplete: Bool {
-        ScenarioRules.primaryAssessments.isSubset(of: completedAssessments)
-    }
-
-    var currentCorrectPriority: TriagePriority {
-        if isDeceased { return .deceased }
-        return isDeteriorated ? (correctDeterioratedPriority ?? correctInitialPriority) : correctInitialPriority
-    }
-
-    var neurologicalRiskTimeRemaining: TimeInterval? {
-        guard let threshold = deteriorationProfile.neurologicalRiskThreshold else { return nil }
-        return max(0, threshold - untreatedSeconds)
-    }
-
-    var deathTimeRemaining: TimeInterval? {
-        guard let threshold = deteriorationProfile.deathThreshold else { return nil }
-        return max(0, threshold - untreatedSeconds)
-    }
-
-    var conditionLabel: String {
-        if isDeceased { return "Deceased — simulation outcome" }
-        if isReceivingCPR { return "CPR in progress" }
-        if deteriorationProfile.requiresCPR { return "Cardiac arrest — untreated" }
-        if health <= 50 { return "Injured — stable" }
-        return "Unconscious but physiologically stable"
-    }
-
+extension Casualty {
     var conditionColour: Color {
         if isDeceased { return .gray }
         if isReceivingCPR { return .green }
         if deteriorationProfile.requiresCPR { return health <= 25 ? .red : .orange }
         return health <= 50 ? .orange : .blue
     }
-
-    var visibleSymptoms: String {
-        if isDeceased { return "No spontaneous breathing or signs of circulation." }
-        if isReceivingCPR {
-            return "No spontaneous breathing. External circulation is being supported by chest compressions."
-        }
-        guard deteriorationProfile.requiresCPR else {
-            return initialFindings[.injuries] ?? "No visible change."
-        }
-        switch deteriorationStage {
-        case 0:
-            return "Unresponsive, motionless, pale, and not breathing normally."
-        case 1:
-            return "Skin is becoming cool; early blue discolouration is visible around the lips."
-        case 2:
-            return "Blue discolouration is worsening and the casualty remains unresponsive."
-        case 3:
-            return "Severe oxygen-deprivation signs are visible; neurological-injury risk is critical."
-        case 4:
-            return "Profound blue discolouration and continued absence of spontaneous circulation."
-        default:
-            return "No spontaneous breathing or signs of circulation."
-        }
-    }
-
-    func finding(for assessment: Assessment) -> String {
-        if deteriorationProfile.requiresCPR {
-            switch assessment {
-            case .response:
-                return isDeceased ? "No response." : "Unresponsive to voice and pain."
-            case .breathing:
-                return isReceivingCPR
-                    ? "No spontaneous breathing; CPR is in progress."
-                    : "Not breathing normally."
-            case .perfusion:
-                if isReceivingCPR { return "No spontaneous pulse; circulation supported by compressions." }
-                return "No palpable pulse or spontaneous circulation."
-            case .injuries:
-                return visibleSymptoms
-            }
-        }
-        if isDeteriorated, let finding = deterioratedFindings[assessment] { return finding }
-        return initialFindings[assessment] ?? "No finding recorded."
-    }
-}
-
-struct SessionEvent: Identifiable {
-    let id = UUID()
-    let elapsed: TimeInterval
-    let category: String
-    let detail: String
-    let isPositive: Bool?
-    let outcome: String
-
-    var timestamp: String {
-        let seconds = max(0, Int(elapsed))
-        return String(format: "%02d:%02d", seconds / 60, seconds % 60)
-    }
-}
-
-struct ScoreBreakdown {
-    let safety: Int
-    let assessment: Int
-    let triage: Int
-    let treatment: Int
-    let communication: Int
-    var total: Int { safety + assessment + triage + treatment + communication }
 }
 
 struct RecommendedAction {
@@ -242,6 +77,7 @@ struct RecommendedAction {
 @MainActor
 final class TrainingSession: ObservableObject {
     @Published var phase: ScenarioPhase = .briefing
+    @Published var scenarioPace: ScenarioPace = .demo
     @Published var casualties: [Casualty] = TrainingSession.makeCasualties()
     @Published var selectedCasualtyID: String?
     @Published var hazardIdentified = false
@@ -250,13 +86,16 @@ final class TrainingSession: ObservableObject {
     @Published var resourceRequestSent = false
     @Published var deteriorationTriggered = false
     @Published var events: [SessionEvent] = []
+    @Published var decisionEvidence: [DecisionEvidence] = []
     @Published var elapsed: TimeInterval = 0
     @Published var conditionAlert: String? = nil
+    @Published private(set) var revision = 0
 
-    private var startedAt: Date?
     private var lastTickAt: Date?
     private var timer: Timer?
     private let voice = AVSpeechSynthesizer()
+    private var currentActorRole: ResponderRole = .incidentCommander
+    var didChange: ((SharedIncidentSnapshot) -> Void)?
 
     var selectedCasualty: Casualty? {
         guard let id = selectedCasualtyID else { return nil }
@@ -355,6 +194,109 @@ final class TrainingSession: ObservableObject {
         events.filter { $0.category != "Navigation" }
     }
 
+    func apply(_ command: IncidentCommand, actorRole: ResponderRole) {
+        if phase == .active {
+            advanceClock()
+        }
+        currentActorRole = actorRole
+        defer { currentActorRole = .incidentCommander }
+
+        switch command {
+        case .begin:
+            begin()
+        case .end:
+            end()
+        case .reset:
+            reset()
+        case .setScenarioPace(let pace):
+            setScenarioPace(pace)
+        case .markSurveyComplete:
+            markSurveyComplete()
+        case .identifyHazard:
+            identifyHazard()
+        case .communicateHazard:
+            communicateHazard()
+        case .requestResources:
+            requestResources()
+        case .selectCasualty(let id):
+            selectCasualty(id)
+        case .closeCasualty:
+            closeCasualty()
+        case .performAssessment(let casualtyID, let assessment, let evidence):
+            perform(assessment, for: casualtyID, evidence: evidence)
+        case .assignPriority(let casualtyID, let priority):
+            assign(priority, to: casualtyID)
+        case .beginCPR(let casualtyID):
+            beginCPR(for: casualtyID)
+        case .endCPR(let casualtyID, let reason):
+            endCPR(for: casualtyID, reason: reason)
+        }
+    }
+
+    func recordRoleRejection(_ command: IncidentCommand, actorRole: ResponderRole) {
+        guard phase == .active else { return }
+        advanceClock()
+        currentActorRole = actorRole
+        defer { currentActorRole = .incidentCommander }
+
+        record(
+            "Command",
+            "\(actorRole.title) attempted to \(command.actionTitle) outside the assigned role.",
+            positive: false,
+            outcome: "Role boundary protected",
+            evidenceOutcome: .needsReview,
+            rationale: command.permissionDescription,
+            cues: [
+                "Assigned responsibility: \(actorRole.responsibility)",
+                "Requested action: \(command.actionTitle)"
+            ],
+            consequence: "The command was rejected and the incident state did not change.",
+            recommendedAction: "Hand the action to the responsible role or change roles before attempting it again.",
+            replayFocusCasualtyID: command.targetCasualtyID
+        )
+    }
+
+    func sharedSnapshot() -> SharedIncidentSnapshot {
+        SharedIncidentSnapshot(
+            revision: revision,
+            phase: phase,
+            scenarioPace: scenarioPace,
+            casualties: casualties,
+            hazardIdentified: hazardIdentified,
+            hazardCommunicated: hazardCommunicated,
+            sceneSurveyed: sceneSurveyed,
+            resourceRequestSent: resourceRequestSent,
+            deteriorationTriggered: deteriorationTriggered,
+            events: events,
+            decisionEvidence: decisionEvidence,
+            elapsed: elapsed,
+            conditionAlert: conditionAlert
+        )
+    }
+
+    func applySharedSnapshot(_ snapshot: SharedIncidentSnapshot, force: Bool = false) {
+        guard force || snapshot.revision >= revision else { return }
+        timer?.invalidate()
+        timer = nil
+        revision = snapshot.revision
+        phase = snapshot.phase
+        scenarioPace = snapshot.scenarioPace
+        casualties = snapshot.casualties
+        if snapshot.phase != .active {
+            selectedCasualtyID = nil
+        }
+        hazardIdentified = snapshot.hazardIdentified
+        hazardCommunicated = snapshot.hazardCommunicated
+        sceneSurveyed = snapshot.sceneSurveyed
+        resourceRequestSent = snapshot.resourceRequestSent
+        deteriorationTriggered = snapshot.deteriorationTriggered
+        events = snapshot.events
+        decisionEvidence = snapshot.decisionEvidence
+        elapsed = snapshot.elapsed
+        conditionAlert = snapshot.conditionAlert
+        lastTickAt = nil
+    }
+
     func begin() {
         casualties = Self.makeCasualties()
         selectedCasualtyID = nil
@@ -364,13 +306,33 @@ final class TrainingSession: ObservableObject {
         resourceRequestSent = false
         deteriorationTriggered = false
         events = []
+        decisionEvidence = []
         elapsed = 0
         conditionAlert = nil
         phase = .active
-        startedAt = Date()
-        lastTickAt = startedAt
-        record("Scenario", "Road traffic collision scenario started.", outcome: "Scenario active")
+        lastTickAt = Date()
+        record(
+            "Scenario",
+            "Road traffic collision scenario started.",
+            outcome: "Scenario active",
+            evidenceOutcome: .scenarioUpdate,
+            rationale: "The briefing establishes three casualties, an unknown roadside hazard, and a time-critical cardiac arrest.",
+            cues: [
+                "Three reported casualties",
+                "Hazards initially unknown",
+                "One condition may change",
+                "Exercise pace: \(scenarioPace.title)"
+            ],
+            consequence: "The incident clock and untreated deterioration clock started."
+        )
         startTimer()
+    }
+
+    func setScenarioPace(_ pace: ScenarioPace) {
+        guard phase == .briefing, scenarioPace != pace else { return }
+        scenarioPace = pace
+        conditionAlert = nil
+        commitChange()
     }
 
     func end() {
@@ -382,24 +344,35 @@ final class TrainingSession: ObservableObject {
         record(
             "Scenario",
             "Scenario ended with \(taggedCount) of \(casualties.count) casualties tagged.",
-            outcome: "Debrief generated"
+            outcome: "Debrief generated",
+            evidenceOutcome: canComplete ? .succeeded : .needsReview,
+            rationale: canComplete
+                ? "Every casualty had a recorded priority when the scenario ended."
+                : "Ending before every casualty is tagged leaves incident command without a complete priority picture.",
+            cues: ["\(taggedCount) of \(casualties.count) casualties tagged"],
+            consequence: "The evidence replay and after-action review were generated.",
+            recommendedAction: canComplete
+                ? nil
+                : "Complete the primary assessments and assign a priority to every casualty before ending the incident."
         )
         timer?.invalidate()
         timer = nil
         lastTickAt = nil
         phase = .complete
         selectedCasualtyID = nil
+        commitChange()
     }
 
     func reset() {
         timer?.invalidate()
         timer = nil
-        startedAt = nil
         lastTickAt = nil
         phase = .briefing
         selectedCasualtyID = nil
         elapsed = 0
         conditionAlert = nil
+        revision += 1
+        didChange?(sharedSnapshot())
     }
 
     func markSurveyComplete() {
@@ -409,7 +382,11 @@ final class TrainingSession: ObservableObject {
             "Safety",
             "Completed a 360° scene survey before casualty assessment.",
             positive: true,
-            outcome: "Scene entry safe"
+            outcome: "Scene entry safe",
+            evidenceOutcome: .succeeded,
+            rationale: "A deliberate survey reduces the chance of entering an unmanaged fuel hazard or missing additional casualties.",
+            cues: ["Two damaged vehicles", "Yellow fuel spill", "Three casualty markers"],
+            consequence: "Approach routes and hazard controls could be planned before patient contact."
         )
     }
 
@@ -420,7 +397,11 @@ final class TrainingSession: ObservableObject {
             "Safety",
             "Identified the leaking-fuel hazard and established an exclusion zone.",
             positive: true,
-            outcome: "Correct recognition"
+            outcome: "Correct recognition",
+            evidenceOutcome: .succeeded,
+            rationale: "The yellow spill beside the damaged vehicle indicates a flammable liquid hazard.",
+            cues: ["Yellow liquid at vehicle", "Collision damage", "No fire crew on scene"],
+            consequence: "The fuel area was treated as an exclusion zone."
         )
     }
 
@@ -431,7 +412,11 @@ final class TrainingSession: ObservableObject {
             "Communication",
             "Reported the fuel hazard to incident command.",
             positive: true,
-            outcome: "Hazard reported"
+            outcome: "Hazard reported",
+            evidenceOutcome: .succeeded,
+            rationale: "Recognising a hazard does not protect other responders until it is communicated.",
+            cues: ["Fuel hazard already identified", "Other responders may enter the scene"],
+            consequence: "Incident command received the exclusion-zone warning."
         )
     }
 
@@ -442,52 +427,89 @@ final class TrainingSession: ObservableObject {
             "Communication",
             "Requested fire suppression and additional medical resources.",
             positive: true,
-            outcome: "Escalation complete"
+            outcome: "Escalation complete",
+            evidenceOutcome: .succeeded,
+            rationale: "Three casualties plus a fuel leak exceed the capability of a single responder.",
+            cues: ["Three casualties", "Active fuel hazard", "Cardiac arrest requires continuous care"],
+            consequence: "Fire suppression and additional medical support were dispatched."
         )
     }
 
     func selectCasualty(_ id: String) {
-        guard phase == .active else { return }
-        if let selectedCasualtyID, selectedCasualtyID != id {
-            endCPR(for: selectedCasualtyID, reason: "Moved to another casualty")
-        }
+        guard phase == .active,
+              casualties.contains(where: { $0.id == id }) else { return }
         selectedCasualtyID = id
         if let casualty = casualties.first(where: { $0.id == id }) {
-            record("Navigation", "Approached \(casualty.name) at \(casualty.location).")
-        }
-    }
-
-    func closeCasualty() {
-        if let selectedCasualtyID {
-            endCPR(for: selectedCasualtyID, reason: "Compression hold released")
-        }
-        selectedCasualtyID = nil
-    }
-
-    func perform(_ assessment: Assessment) {
-        guard phase == .active,
-              let id = selectedCasualtyID,
-              let index = casualties.firstIndex(where: { $0.id == id }) else { return }
-        let wasNew = casualties[index].completedAssessments.insert(assessment).inserted
-        if wasNew {
             record(
-                "Assessment",
-                "\(assessment.rawValue) for \(casualties[index].name): \(casualties[index].finding(for: assessment))",
-                positive: true,
-                outcome: "Finding recorded"
+                "Navigation",
+                "Approached \(casualty.name) at \(casualty.location).",
+                includeInReplay: false
             )
         }
     }
 
-    func assign(_ priority: TriagePriority) {
+    func closeCasualty() {
+        selectedCasualtyID = nil
+        commitChange()
+    }
+
+    func applyLocalNavigation(_ command: IncidentCommand) {
+        guard phase == .active else { return }
+        switch command {
+        case .selectCasualty(let casualtyID):
+            guard casualties.contains(where: { $0.id == casualtyID }) else { return }
+            selectedCasualtyID = casualtyID
+        case .closeCasualty:
+            selectedCasualtyID = nil
+        default:
+            assertionFailure("Expected a local navigation command")
+        }
+    }
+
+    func perform(
+        _ assessment: Assessment,
+        for casualtyID: String,
+        evidence: AssessmentEvidence
+    ) {
         guard phase == .active,
-              let id = selectedCasualtyID,
-              let index = casualties.firstIndex(where: { $0.id == id }) else { return }
+              let index = casualties.firstIndex(where: { $0.id == casualtyID }) else { return }
+        let wasNew = casualties[index].completedAssessments.insert(assessment).inserted
+        if wasNew {
+            let casualty = casualties[index]
+            let finding = casualty.finding(for: assessment)
+            record(
+                "Assessment",
+                "\(assessment.rawValue) for \(casualty.name): \(finding)",
+                positive: true,
+                outcome: "Spatially verified",
+                evidenceOutcome: .succeeded,
+                rationale: "The \(evidence.source.title.lowercased()) verified \(evidence.gesture) for \(String(format: "%.1f", evidence.sustainedDuration)) seconds before revealing the finding.",
+                cues: [finding, "Hand proximity \(String(format: "%.2f", evidence.proximityMetres)) m"],
+                consequence: assessmentConsequence(assessment, casualty: casualty),
+                replayFocusCasualtyID: casualtyID
+            )
+        }
+    }
+
+    func assign(_ priority: TriagePriority, to casualtyID: String) {
+        guard phase == .active,
+              let index = casualties.firstIndex(where: { $0.id == casualtyID }) else { return }
 
         guard casualties[index].primaryAssessmentComplete else {
             let message = "Complete response, breathing, and perfusion checks before tagging \(casualties[index].name)."
             conditionAlert = message
-            record("Triage", message, positive: false, outcome: "Assessment incomplete")
+            record(
+                "Triage",
+                message,
+                positive: false,
+                outcome: "Assessment incomplete",
+                evidenceOutcome: .needsReview,
+                rationale: "Priority assignment without response, breathing, and perfusion evidence is not defensible.",
+                cues: missingPrimaryAssessmentCues(for: casualties[index]),
+                consequence: "The tag was blocked until the primary assessment is complete.",
+                recommendedAction: "Complete every missing primary assessment, then assign the priority from those findings.",
+                replayFocusCasualtyID: casualtyID
+            )
             return
         }
 
@@ -495,23 +517,32 @@ final class TrainingSession: ObservableObject {
         casualties[index].assignedPriority = priority
         let correct = priority == casualties[index].currentCorrectPriority
         let action = previous == nil ? "Tagged" : "Retagged"
+        let corrected = previous != nil && previous != casualties[index].currentCorrectPriority && correct
+        let casualty = casualties[index]
         record(
             "Triage",
-            "\(action) \(casualties[index].name) as \(priority.rawValue) — \(priority.title).",
+            "\(action) \(casualty.name) as \(priority.rawValue) - \(priority.title).",
             positive: correct,
-            outcome: correct ? "Correct priority" : "Priority mismatch"
+            outcome: correct ? "Correct priority" : "Priority mismatch",
+            evidenceOutcome: corrected ? .corrected : correct ? .succeeded : .needsReview,
+            rationale: triageRationale(for: casualty, assigned: priority, correct: correct),
+            cues: primaryFindingCues(for: casualty),
+            consequence: correct
+                ? "The casualty entered the correct treatment priority queue."
+                : "The mismatch could delay care or divert scarce resources.",
+            recommendedAction: correct
+                ? nil
+                : "Re-read the response, breathing, and perfusion evidence, then retag \(casualty.name) as \(casualty.currentCorrectPriority.rawValue).",
+            replayFocusCasualtyID: casualtyID
         )
     }
 
-    func beginCPR(for casualtyID: String? = nil) {
+    func beginCPR(for casualtyID: String) {
         guard phase == .active,
-              let id = casualtyID ?? selectedCasualtyID,
-              let index = casualties.firstIndex(where: { $0.id == id }),
+              let index = casualties.firstIndex(where: { $0.id == casualtyID }),
               casualties[index].deteriorationProfile.requiresCPR,
               !casualties[index].isReceivingCPR,
               !casualties[index].isDeceased else { return }
-
-        selectedCasualtyID = id
         casualties[index].isReceivingCPR = true
         casualties[index].activeCPRBoutSeconds = 0
         casualties[index].cprSessionCount += 1
@@ -521,7 +552,12 @@ final class TrainingSession: ObservableObject {
             "Treatment",
             "CPR commenced for \(casualties[index].name) with \(Self.formatCountdown(pausedAt)) remaining to neurological risk.",
             positive: true,
-            outcome: "Deterioration paused"
+            outcome: "Deterioration paused",
+            evidenceOutcome: .succeeded,
+            rationale: "Unresponsiveness, abnormal breathing, and absent circulation indicate immediate CPR.",
+            cues: primaryFindingCues(for: casualties[index]),
+            consequence: "Untreated deterioration paused while effective compressions continued.",
+            replayFocusCasualtyID: casualtyID
         )
 
         let announcement = AVSpeechUtterance(
@@ -532,14 +568,9 @@ final class TrainingSession: ObservableObject {
         voice.speak(announcement)
     }
 
-    func endCPR(for casualtyID: String? = nil, reason: String = "Compression hold released") {
+    func endCPR(for casualtyID: String, reason: String = "Compression hold released") {
         guard phase == .active else { return }
-
-        let id = casualtyID
-            ?? casualties.first(where: { $0.isReceivingCPR })?.id
-            ?? selectedCasualtyID
-        guard let id,
-              let index = casualties.firstIndex(where: { $0.id == id }),
+        guard let index = casualties.firstIndex(where: { $0.id == casualtyID }),
               casualties[index].isReceivingCPR else { return }
 
         let boutDuration = casualties[index].activeCPRBoutSeconds
@@ -555,7 +586,17 @@ final class TrainingSession: ObservableObject {
             "Treatment",
             "\(reason) after \(Self.formatDuration(boutDuration)) of effective CPR; untreated countdown resumed at \(Self.formatCountdown(remaining)).",
             positive: metDemonstrationTarget,
-            outcome: metDemonstrationTarget ? "Effective CPR recorded" : "CPR interrupted early"
+            outcome: metDemonstrationTarget ? "Effective CPR recorded" : "CPR interrupted early",
+            evidenceOutcome: metDemonstrationTarget ? .succeeded : .needsReview,
+            rationale: metDemonstrationTarget
+                ? "The compression hold met the demonstration threshold and preserved continuous support during the recorded bout."
+                : "The compression hold ended before the demonstration threshold, interrupting external circulation.",
+            cues: ["Effective bout \(Self.formatDuration(boutDuration))", "Target rhythm \(ScenarioRules.targetCompressionRate)/min"],
+            consequence: "Untreated deterioration resumed as soon as compressions stopped.",
+            recommendedAction: metDemonstrationTarget
+                ? nil
+                : "Re-establish the compression hold and maintain it continuously for at least \(Int(ScenarioRules.minimumDemonstrationCPRDuration)) real seconds.",
+            replayFocusCasualtyID: casualtyID
         )
     }
 
@@ -614,10 +655,6 @@ final class TrainingSession: ObservableObject {
         return Array(review.prefix(2))
     }
 
-    private var deteriorationTimestamp: String {
-        events.first(where: { $0.category == "Deterioration" })?.timestamp ?? "the midpoint"
-    }
-
     private func startTimer() {
         timer?.invalidate()
 
@@ -626,75 +663,52 @@ final class TrainingSession: ObservableObject {
             repeats: true
         ) { [weak self] _ in
             MainActor.assumeIsolated {
-                guard let self,
-                      let startedAt = self.startedAt,
-                      self.phase == .active else {
-                    return
-                }
-
-                let now = Date()
-                let delta = max(
-                    0,
-                    now.timeIntervalSince(self.lastTickAt ?? now)
-                )
-
-                self.lastTickAt = now
-                self.elapsed = now.timeIntervalSince(startedAt)
-                self.updatePatientDeterioration(by: delta)
+                guard let self, self.phase == .active else { return }
+                self.advanceClock()
+                self.commitChange()
             }
         }
     }
 
-    private func updatePatientDeterioration(by delta: TimeInterval) {
-        guard delta > 0 else { return }
+    func resumeLocalClockIfNeeded() {
+        guard phase == .active, timer == nil else { return }
+        lastTickAt = Date()
+        startTimer()
+    }
+
+    private func advanceClock(to now: Date = Date()) {
+        guard phase == .active else { return }
+        guard let lastTickAt else {
+            self.lastTickAt = now
+            return
+        }
+
+        let realDelta = max(0, now.timeIntervalSince(lastTickAt))
+        guard realDelta > 0 else { return }
+        self.lastTickAt = now
+
+        let exerciseDelta = scenarioPace.exerciseDuration(forRealDuration: realDelta)
+        elapsed += exerciseDelta
+        updatePatientDeterioration(
+            byExerciseDelta: exerciseDelta,
+            realDelta: realDelta
+        )
+    }
+
+    private func updatePatientDeterioration(
+        byExerciseDelta exerciseDelta: TimeInterval,
+        realDelta: TimeInterval
+    ) {
+        guard exerciseDelta > 0, realDelta > 0 else { return }
 
         for index in casualties.indices {
-            guard case let .untreatedCardiacArrest(neurologicalRiskAfter, deathAfter) = casualties[index].deteriorationProfile else {
-                continue
-            }
-
-            if casualties[index].isReceivingCPR {
-                casualties[index].effectiveCPRSeconds += delta
-                casualties[index].activeCPRBoutSeconds += delta
-                continue
-            }
-
-            guard !casualties[index].isDeceased else { continue }
-
-            casualties[index].untreatedSeconds = min(
-                deathAfter,
-                casualties[index].untreatedSeconds + delta
-            )
-
-            let elapsedFraction = casualties[index].untreatedSeconds / deathAfter
-            casualties[index].health = max(
-                0,
-                casualties[index].initialHealth * (1 - elapsedFraction)
-            )
-
-            let newStage = deteriorationStage(
-                untreatedSeconds: casualties[index].untreatedSeconds,
-                neurologicalRiskAfter: neurologicalRiskAfter,
-                deathAfter: deathAfter
-            )
-
-            if newStage > casualties[index].deteriorationStage {
+            if let newStage = casualties[index].advanceClocks(
+                realDuration: realDelta,
+                exerciseDuration: exerciseDelta
+            ) {
                 applyDeteriorationStage(newStage, to: index)
             }
         }
-    }
-
-    private func deteriorationStage(
-        untreatedSeconds: TimeInterval,
-        neurologicalRiskAfter: TimeInterval,
-        deathAfter: TimeInterval
-    ) -> Int {
-        if untreatedSeconds >= deathAfter { return 5 }
-        if untreatedSeconds >= neurologicalRiskAfter + 120 { return 4 }
-        if untreatedSeconds >= neurologicalRiskAfter { return 3 }
-        if untreatedSeconds >= neurologicalRiskAfter - 60 { return 2 }
-        if untreatedSeconds >= neurologicalRiskAfter - 240 { return 1 }
-        return 0
     }
 
     private func applyDeteriorationStage(_ stage: Int, to index: Int) {
@@ -728,7 +742,23 @@ final class TrainingSession: ObservableObject {
         }
 
         conditionAlert = message
-        record("Deterioration", message, positive: false, outcome: "Condition worsened")
+        record(
+            "Deterioration",
+            message,
+            positive: false,
+            outcome: "Condition worsened",
+            evidenceOutcome: .scenarioUpdate,
+            rationale: "Untreated cardiac arrest continued while no effective CPR was being delivered.",
+            cues: ["Untreated time \(Self.formatDuration(casualties[index].untreatedSeconds))", casualties[index].visibleSymptoms],
+            consequence: stage >= 5
+                ? "The casualty reached the simulation death threshold."
+                : "Previous assessment findings were invalidated and reassessment became necessary.",
+            recommendedAction: stage >= 5
+                ? "Use the replay to identify where earlier CPR or reassessment could have changed the outcome."
+                : "Reassess Jordan immediately and maintain continuous CPR while other roles continue incident command.",
+            replayFocusCasualtyID: casualties[index].id,
+            recordAsSystem: true
+        )
 
         let announcement = AVSpeechUtterance(string: spokenMessage)
         announcement.rate = 0.48
@@ -740,9 +770,17 @@ final class TrainingSession: ObservableObject {
         _ category: String,
         _ detail: String,
         positive: Bool? = nil,
-        outcome: String? = nil
+        outcome: String? = nil,
+        evidenceOutcome: DecisionOutcome? = nil,
+        rationale: String? = nil,
+        cues: [String] = [],
+        consequence: String? = nil,
+        recommendedAction: String? = nil,
+        replayFocusCasualtyID: String? = nil,
+        recordAsSystem: Bool = false,
+        includeInReplay: Bool = true
     ) {
-        let eventElapsed = startedAt.map { Date().timeIntervalSince($0) } ?? elapsed
+        let eventElapsed = elapsed
         let resolvedOutcome = outcome ?? {
             if positive == true { return "Completed" }
             if positive == false { return "Needs review" }
@@ -757,6 +795,104 @@ final class TrainingSession: ObservableObject {
                 outcome: resolvedOutcome
             )
         )
+
+        if includeInReplay {
+            let resolvedEvidenceOutcome = evidenceOutcome
+                ?? (positive == true ? .succeeded : positive == false ? .needsReview : .scenarioUpdate)
+            decisionEvidence.append(
+                DecisionEvidence(
+                    elapsed: eventElapsed,
+                    category: category,
+                    action: detail,
+                    actorRole: recordAsSystem ? nil : currentActorRole,
+                    outcome: resolvedEvidenceOutcome,
+                    rationale: rationale ?? "This event changed the incident state recorded for the after-action review.",
+                    cues: cues,
+                    consequence: consequence ?? resolvedOutcome,
+                    recommendedAction: recommendedAction,
+                    snapshot: replaySnapshot(
+                        at: eventElapsed,
+                        focusCasualtyID: replayFocusCasualtyID
+                    )
+                )
+            )
+        }
+        commitChange()
+    }
+
+    private func commitChange() {
+        revision += 1
+        didChange?(sharedSnapshot())
+    }
+
+    private func replaySnapshot(
+        at elapsed: TimeInterval,
+        focusCasualtyID: String? = nil
+    ) -> IncidentReplaySnapshot {
+        IncidentReplaySnapshot(
+            elapsed: elapsed,
+            scenarioPace: scenarioPace,
+            selectedCasualtyID: focusCasualtyID ?? selectedCasualtyID,
+            sceneSurveyed: sceneSurveyed,
+            hazardIdentified: hazardIdentified,
+            hazardCommunicated: hazardCommunicated,
+            resourceRequestSent: resourceRequestSent,
+            casualties: casualties.map { casualty in
+                CasualtyReplayState(
+                    id: casualty.id,
+                    name: casualty.name,
+                    health: casualty.health,
+                    assignedPriority: casualty.assignedPriority,
+                    correctPriority: casualty.currentCorrectPriority,
+                    completedAssessments: casualty.completedAssessments,
+                    isReceivingCPR: casualty.isReceivingCPR,
+                    isDeceased: casualty.isDeceased,
+                    conditionLabel: casualty.conditionLabel
+                )
+            }
+        )
+    }
+
+    private func primaryFindingCues(for casualty: Casualty) -> [String] {
+        Assessment.allCases
+            .filter { casualty.completedAssessments.contains($0) }
+            .map { "\($0.rawValue): \(casualty.finding(for: $0))" }
+    }
+
+    private func missingPrimaryAssessmentCues(for casualty: Casualty) -> [String] {
+        ScenarioRules.primaryAssessments
+            .filter { !casualty.completedAssessments.contains($0) }
+            .sorted { $0.rawValue < $1.rawValue }
+            .map { "Missing: \($0.rawValue)" }
+    }
+
+    private func assessmentConsequence(_ assessment: Assessment, casualty: Casualty) -> String {
+        switch assessment {
+        case .response:
+            "The casualty's responsiveness became available for triage reasoning."
+        case .breathing:
+            casualty.finding(for: assessment).contains("Not breathing")
+                ? "An immediate airway and resuscitation threat was exposed."
+                : "Respiratory status became available for priority assignment."
+        case .perfusion:
+            casualty.finding(for: assessment).contains("No palpable")
+                ? "Absent spontaneous circulation confirmed the need for CPR."
+                : "Perfusion status became available for priority assignment."
+        case .injuries:
+            "Visible injury evidence was added to the casualty picture."
+        }
+    }
+
+    private func triageRationale(
+        for casualty: Casualty,
+        assigned priority: TriagePriority,
+        correct: Bool
+    ) -> String {
+        let expected = casualty.currentCorrectPriority
+        if correct {
+            return "\(priority.rawValue) matches the current response, breathing, perfusion, and deterioration evidence for \(casualty.name)."
+        }
+        return "\(priority.rawValue) does not match the current evidence. \(casualty.name) requires \(expected.rawValue) - \(expected.title)."
     }
 
     private static func formatCountdown(_ time: TimeInterval) -> String {
@@ -826,10 +962,12 @@ final class TrainingSession: ObservableObject {
 
 struct ContentView: View {
     @EnvironmentObject private var session: TrainingSession
+    @EnvironmentObject private var collaboration: IncidentCollaborationCoordinator
     @Environment(\.openImmersiveSpace) private var openImmersiveSpace
     @Environment(\.dismissImmersiveSpace) private var dismissImmersiveSpace
     @Environment(\.dismissWindow) private var dismissWindow
     @State private var immersiveSpaceIsOpen = false
+    @State private var immersiveSpaceIsOpening = false
     @State private var statusMessage: String?
 
     var body: some View {
@@ -855,7 +993,15 @@ struct ContentView: View {
                     .padding(12)
                     .background(.regularMaterial, in: Capsule())
                     .padding()
+                }
+        }
+        .onChange(of: session.phase) { _, phase in
+            guard phase == .active,
+                  !immersiveSpaceIsOpen,
+                  !immersiveSpaceIsOpening else {
+                return
             }
+            Task { await openScenarioSpace() }
         }
     }
 
@@ -868,28 +1014,33 @@ struct ContentView: View {
     }
 
     private func beginScenario() {
-        Task {
-            statusMessage = nil
-            session.begin()
-            let result = await openImmersiveSpace(id: "TriageScene")
-            switch result {
-            case .opened: immersiveSpaceIsOpen = true
-                dismissWindow(id: "MainWindow")
-            case .userCancelled:
-                session.reset()
-                statusMessage = "Scenario opening was cancelled."
-            case .error:
-                session.reset()
-                statusMessage = "The immersive scene could not be opened."
-            @unknown default:
-                session.reset()
-                statusMessage = "An unexpected error occurred."
-            }
-        }
+        statusMessage = nil
+        collaboration.submit(.begin)
     }
 
     private func restart() {
-        session.reset()
+        collaboration.submit(.reset)
+    }
+
+    private func openScenarioSpace() async {
+        immersiveSpaceIsOpening = true
+        defer { immersiveSpaceIsOpening = false }
+
+        let result = await openImmersiveSpace(id: "TriageScene")
+        switch result {
+        case .opened:
+            immersiveSpaceIsOpen = true
+            dismissWindow(id: "MainWindow")
+        case .userCancelled:
+            collaboration.submit(.reset)
+            statusMessage = "Scenario opening was cancelled."
+        case .error:
+            collaboration.submit(.reset)
+            statusMessage = "The immersive scene could not be opened."
+        @unknown default:
+            collaboration.submit(.reset)
+            statusMessage = "An unexpected error occurred."
+        }
     }
 }
 
@@ -905,6 +1056,7 @@ struct ScenarioActiveView: View {
 }
 
 struct BriefingView: View {
+    @EnvironmentObject private var collaboration: IncidentCollaborationCoordinator
     let beginAction: () -> Void
 
     var body: some View {
@@ -927,7 +1079,7 @@ struct BriefingView: View {
                     VStack(alignment: .leading, spacing: 12) {
                         BriefingRow(icon: "car.side.fill", text: "Two-vehicle collision with three reported casualties")
                         BriefingRow(icon: "location.fill", text: "Urban roadside; emergency services not yet on scene")
-                        BriefingRow(icon: "exclamationmark.triangle.fill", text: "Hazards are unknown — survey before approaching")
+                        BriefingRow(icon: "exclamationmark.triangle.fill", text: "Hazards are unknown - survey before approaching")
                         BriefingRow(icon: "clock.fill", text: "One casualty may change condition during the exercise")
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -947,8 +1099,10 @@ struct BriefingView: View {
                     .padding(.vertical, 8)
                 }
 
+                CollaborationLobbyView()
+
                 HStack {
-                    Label("Training aid only — follow your organisation’s approved protocols.", systemImage: "info.circle")
+                    Label("Training aid only - follow your organisation’s approved protocols.", systemImage: "info.circle")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                     Spacer()
@@ -958,9 +1112,134 @@ struct BriefingView: View {
                     }
                     .buttonStyle(.borderedProminent)
                     .controlSize(.large)
+                    .disabled(!collaboration.canBeginIncident)
                 }
             }
             .padding(32)
+        }
+    }
+}
+
+struct CollaborationLobbyView: View {
+    @EnvironmentObject private var session: TrainingSession
+    @EnvironmentObject private var collaboration: IncidentCollaborationCoordinator
+
+    var body: some View {
+        GroupBox("Team incident command") {
+            VStack(alignment: .leading, spacing: 14) {
+                HStack(spacing: 14) {
+                    Image(systemName: collaboration.isShared ? "shareplay" : "person.2.wave.2.fill")
+                        .font(.title2)
+                        .foregroundStyle(collaboration.isShared ? .green : .blue)
+                        .frame(width: 34)
+
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(collaboration.status.title)
+                            .font(.headline)
+                        Text(
+                            collaboration.isShared
+                                ? "\(collaboration.participantCount) responder\(collaboration.participantCount == 1 ? "" : "s") share one incident state."
+                                : "Run solo or invite nearby and FaceTime Vision Pro responders through SharePlay."
+                        )
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    }
+
+                    Spacer()
+
+                    if collaboration.isShared {
+                        Button("Leave", role: .destructive) {
+                            collaboration.leaveSharePlay()
+                        }
+                        .buttonStyle(.bordered)
+                    } else {
+                        Button {
+                            Task { await collaboration.activateSharePlay() }
+                        } label: {
+                            Label("Start SharePlay", systemImage: "shareplay")
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(collaboration.status == .preparing)
+                    }
+                }
+
+                Divider()
+
+                HStack {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("Your responder role")
+                            .font(.caption.bold())
+                            .foregroundStyle(.secondary)
+                        Text(collaboration.localRole.responsibility)
+                            .font(.caption)
+                    }
+                    Spacer()
+                    Picker("Responder role", selection: $collaboration.localRole) {
+                        ForEach(ResponderRole.allCases) { role in
+                            Label(role.title, systemImage: role.icon)
+                                .tag(role)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    .frame(maxWidth: 260)
+                }
+
+                HStack(spacing: 18) {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("Exercise pace")
+                            .font(.caption.bold())
+                            .foregroundStyle(.secondary)
+                        Text(session.scenarioPace.detail)
+                            .font(.caption)
+                    }
+                    Spacer()
+                    Picker(
+                        "Exercise pace",
+                        selection: Binding(
+                            get: { session.scenarioPace },
+                            set: { collaboration.submit(.setScenarioPace($0)) }
+                        )
+                    ) {
+                        ForEach(ScenarioPace.allCases) { pace in
+                            Text(pace.title).tag(pace)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .frame(width: 250)
+                    .disabled(!collaboration.canBeginIncident)
+                }
+
+                if !collaboration.participantRoles.isEmpty {
+                    HStack(spacing: 8) {
+                        ForEach(
+                            collaboration.participantRoles.values.sorted { $0.title < $1.title },
+                            id: \.self
+                        ) { role in
+                            Label(role.title, systemImage: role.icon)
+                                .font(.caption.bold())
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 6)
+                                .background(.thinMaterial, in: Capsule())
+                        }
+                    }
+                }
+
+                if let notice = collaboration.notice {
+                    Label(notice, systemImage: "info.circle.fill")
+                        .font(.caption.bold())
+                        .foregroundStyle(.orange)
+                }
+
+                if collaboration.isShared && !collaboration.canBeginIncident {
+                    Label(
+                        "Waiting for the shared-incident host in the Incident Commander or Instructor role to enter the incident.",
+                        systemImage: "hourglass"
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                }
+            }
+            .padding(.vertical, 8)
         }
     }
 }
@@ -976,6 +1255,7 @@ struct BriefingRow: View {
 
 struct LiveDashboardView: View {
     @EnvironmentObject private var session: TrainingSession
+    @EnvironmentObject private var collaboration: IncidentCollaborationCoordinator
     let endAction: () -> Void
 
     var body: some View {
@@ -991,17 +1271,17 @@ struct LiveDashboardView: View {
             NextActionCard(action: session.nextRecommendedAction)
 
             HStack(spacing: 16) {
-                Button { session.markSurveyComplete() } label: {
+                Button { collaboration.submit(.markSurveyComplete) } label: {
                     Label(session.sceneSurveyed ? "Survey complete" : "Complete 360° survey", systemImage: "view.360")
                 }
                 .disabled(session.sceneSurveyed)
 
-                Button { session.communicateHazard() } label: {
+                Button { collaboration.submit(.communicateHazard) } label: {
                     Label(session.hazardCommunicated ? "Hazard reported" : "Report hazard", systemImage: "radio")
                 }
                 .disabled(!session.hazardIdentified || session.hazardCommunicated)
 
-                Button { session.requestResources() } label: {
+                Button { collaboration.submit(.requestResources) } label: {
                     Label(session.resourceRequestSent ? "Resources requested" : "Request resources", systemImage: "person.3.fill")
                 }
                 .disabled(session.resourceRequestSent)
@@ -1138,8 +1418,8 @@ struct AfterActionReviewView: View {
                     .padding(.vertical, 8)
                 }
 
-                GroupBox("Decision timeline") {
-                    DebriefTimeline(events: session.debriefEvents)
+                GroupBox("Evidence replay") {
+                    DecisionReplayView(evidence: session.decisionEvidence)
                         .padding(.vertical, 8)
                 }
 
@@ -1162,6 +1442,378 @@ struct AfterActionReviewView: View {
 
     private var scoreColour: Color {
         session.score.total >= 80 ? .green : session.score.total >= 60 ? .orange : .red
+    }
+}
+
+struct DecisionReplayView: View {
+    let evidence: [DecisionEvidence]
+    @State private var selectedIndex = 0
+    @State private var isPlaying = false
+
+    private var selectedEvidence: DecisionEvidence? {
+        guard evidence.indices.contains(selectedIndex) else { return nil }
+        return evidence[selectedIndex]
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            if let selectedEvidence {
+                ReplayOutcomeSummary(evidence: evidence)
+
+                HStack(spacing: 14) {
+                    Button {
+                        isPlaying = false
+                        selectedIndex = max(0, selectedIndex - 1)
+                    } label: {
+                        Image(systemName: "backward.frame.fill")
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(selectedIndex == 0)
+                    .accessibilityLabel("Previous decision")
+
+                    Button {
+                        if selectedIndex == evidence.count - 1 { selectedIndex = 0 }
+                        isPlaying.toggle()
+                    } label: {
+                        Label(isPlaying ? "Pause" : "Replay", systemImage: isPlaying ? "pause.fill" : "play.fill")
+                    }
+                    .buttonStyle(.borderedProminent)
+
+                    Button {
+                        isPlaying = false
+                        selectedIndex = min(evidence.count - 1, selectedIndex + 1)
+                    } label: {
+                        Image(systemName: "forward.frame.fill")
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(selectedIndex == evidence.count - 1)
+                    .accessibilityLabel("Next decision")
+
+                    Slider(
+                        value: Binding(
+                            get: { Double(selectedIndex) },
+                            set: { selectedIndex = Int($0.rounded()) }
+                        ),
+                        in: 0...Double(max(1, evidence.count - 1)),
+                        step: 1
+                    ) {
+                        Text("Decision replay position")
+                    } minimumValueLabel: {
+                        Text("00:00").font(.caption.monospacedDigit())
+                    } maximumValueLabel: {
+                        Text(evidence.last?.timestamp ?? "00:00").font(.caption.monospacedDigit())
+                    }
+                    .disabled(evidence.count <= 1)
+                    .accessibilityValue(
+                        "Decision \(selectedIndex + 1) of \(evidence.count), \(selectedEvidence.category), \(selectedEvidence.outcome.title)"
+                    )
+
+                    Text("\(selectedIndex + 1) / \(evidence.count)")
+                        .font(.caption.bold().monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+
+                IncidentReplayMap(snapshot: selectedEvidence.snapshot)
+                    .frame(height: 270)
+
+                HStack(alignment: .top, spacing: 20) {
+                    VStack(alignment: .leading, spacing: 12) {
+                        HStack {
+                            Label(selectedEvidence.outcome.title, systemImage: outcomeIcon(selectedEvidence.outcome))
+                                .font(.headline)
+                                .foregroundStyle(outcomeColour(selectedEvidence.outcome))
+                            Spacer()
+                            if let actorRole = selectedEvidence.actorRole {
+                                Label(actorRole.title, systemImage: actorRole.icon)
+                                    .font(.caption.bold())
+                                    .foregroundStyle(.secondary)
+                            } else {
+                                Label("Incident system", systemImage: "waveform.path.ecg")
+                                    .font(.caption.bold())
+                                    .foregroundStyle(.secondary)
+                            }
+                            Text(selectedEvidence.timestamp)
+                                .font(.caption.bold().monospacedDigit())
+                        }
+
+                        Text(selectedEvidence.action)
+                            .font(.title3.bold())
+
+                        VStack(alignment: .leading, spacing: 5) {
+                            Text("WHY")
+                                .font(.caption2.bold())
+                                .foregroundStyle(.secondary)
+                            Text(selectedEvidence.rationale)
+                                .font(.subheadline)
+                        }
+
+                        VStack(alignment: .leading, spacing: 5) {
+                            Text("CONSEQUENCE")
+                                .font(.caption2.bold())
+                                .foregroundStyle(.secondary)
+                            Text(selectedEvidence.consequence)
+                                .font(.subheadline)
+                        }
+
+                        if let recommendedAction = selectedEvidence.recommendedAction {
+                            VStack(alignment: .leading, spacing: 5) {
+                                Text("NEXT BEST ACTION")
+                                    .font(.caption2.bold())
+                                    .foregroundStyle(.orange)
+                                Text(recommendedAction)
+                                    .font(.subheadline.bold())
+                            }
+                            .padding(12)
+                            .background(.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 12))
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("EVIDENCE AVAILABLE")
+                            .font(.caption2.bold())
+                            .foregroundStyle(.secondary)
+                        if selectedEvidence.cues.isEmpty {
+                            Text("Scenario state transition")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        } else {
+                            ForEach(selectedEvidence.cues, id: \.self) { cue in
+                                Label(cue, systemImage: "eye.fill")
+                                    .font(.caption)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                            }
+                        }
+                    }
+                    .padding(14)
+                    .frame(width: 300, alignment: .leading)
+                    .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 16))
+                }
+            } else {
+                ContentUnavailableView(
+                    "No decision evidence",
+                    systemImage: "timeline.selection",
+                    description: Text("Complete an incident to generate a causal replay.")
+                )
+            }
+        }
+        .task(id: isPlaying) {
+            guard isPlaying else { return }
+            while !Task.isCancelled && selectedIndex < evidence.count - 1 {
+                try? await Task.sleep(for: .seconds(1.25))
+                guard !Task.isCancelled, isPlaying else { return }
+                withAnimation(.easeInOut(duration: 0.35)) {
+                    selectedIndex += 1
+                }
+            }
+            if !Task.isCancelled { isPlaying = false }
+        }
+        .onChange(of: evidence.count) { _, count in
+            selectedIndex = min(selectedIndex, max(0, count - 1))
+        }
+    }
+
+    private func outcomeIcon(_ outcome: DecisionOutcome) -> String {
+        switch outcome {
+        case .succeeded: "checkmark.seal.fill"
+        case .needsReview: "exclamationmark.triangle.fill"
+        case .corrected: "arrow.trianglehead.2.clockwise.rotate.90.circle.fill"
+        case .scenarioUpdate: "waveform.path.ecg"
+        }
+    }
+
+    private func outcomeColour(_ outcome: DecisionOutcome) -> Color {
+        switch outcome {
+        case .succeeded: .green
+        case .needsReview: .orange
+        case .corrected: .blue
+        case .scenarioUpdate: .secondary
+        }
+    }
+}
+
+struct ReplayOutcomeSummary: View {
+    let evidence: [DecisionEvidence]
+
+    var body: some View {
+        HStack(spacing: 10) {
+            ForEach(DecisionOutcome.allCases) { outcome in
+                Label(
+                    "\(count(for: outcome)) \(outcome.title)",
+                    systemImage: icon(for: outcome)
+                )
+                .font(.caption.bold())
+                .foregroundStyle(colour(for: outcome))
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(colour(for: outcome).opacity(0.1), in: Capsule())
+            }
+            Spacer()
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Replay outcome summary")
+    }
+
+    private func count(for outcome: DecisionOutcome) -> Int {
+        evidence.lazy.filter { $0.outcome == outcome }.count
+    }
+
+    private func icon(for outcome: DecisionOutcome) -> String {
+        switch outcome {
+        case .succeeded: "checkmark.seal.fill"
+        case .needsReview: "exclamationmark.triangle.fill"
+        case .corrected: "arrow.trianglehead.2.clockwise.rotate.90.circle.fill"
+        case .scenarioUpdate: "waveform.path.ecg"
+        }
+    }
+
+    private func colour(for outcome: DecisionOutcome) -> Color {
+        switch outcome {
+        case .succeeded: .green
+        case .needsReview: .orange
+        case .corrected: .blue
+        case .scenarioUpdate: .secondary
+        }
+    }
+}
+
+struct IncidentReplayMap: View {
+    let snapshot: IncidentReplaySnapshot
+
+    var body: some View {
+        GeometryReader { geometry in
+            ZStack {
+                RoundedRectangle(cornerRadius: 24)
+                    .fill(Color.black.opacity(0.82))
+
+                Rectangle()
+                    .fill(Color.white.opacity(0.12))
+                    .frame(width: 4)
+                Rectangle()
+                    .fill(Color.yellow.opacity(0.75))
+                    .frame(width: 3, height: geometry.size.height * 0.72)
+                    .mask {
+                        VStack(spacing: 10) {
+                            ForEach(0..<8, id: \.self) { _ in
+                                Rectangle().frame(height: 12)
+                            }
+                        }
+                    }
+
+                replayVehicle(colour: .gray)
+                    .rotationEffect(.degrees(-14))
+                    .position(x: geometry.size.width * 0.34, y: geometry.size.height * 0.52)
+                replayVehicle(colour: .blue.opacity(0.7))
+                    .rotationEffect(.degrees(17))
+                    .position(x: geometry.size.width * 0.66, y: geometry.size.height * 0.56)
+
+                Circle()
+                    .fill(snapshot.hazardIdentified ? Color.red : Color.yellow)
+                    .frame(width: 38, height: 24)
+                    .overlay {
+                        Image(systemName: snapshot.hazardIdentified ? "exclamationmark.triangle.fill" : "drop.fill")
+                            .font(.caption2)
+                            .foregroundStyle(.black)
+                    }
+                    .position(x: geometry.size.width * 0.42, y: geometry.size.height * 0.66)
+
+                ForEach(snapshot.casualties) { casualty in
+                    casualtyNode(casualty)
+                        .position(position(for: casualty.id, in: geometry.size))
+                }
+
+                VStack {
+                    HStack {
+                        Label(
+                            snapshot.sceneSurveyed ? "Scene surveyed" : "Survey pending",
+                            systemImage: snapshot.sceneSurveyed ? "view.360.circle.fill" : "view.360"
+                        )
+                        .foregroundStyle(snapshot.sceneSurveyed ? .green : .orange)
+                        Spacer()
+                        Label(snapshot.scenarioPace.title, systemImage: "speedometer")
+                            .foregroundStyle(.secondary)
+                        Text(String(format: "%02d:%02d", Int(snapshot.elapsed) / 60, Int(snapshot.elapsed) % 60))
+                            .monospacedDigit()
+                    }
+                    .font(.caption.bold())
+                    .padding(12)
+                    .background(.ultraThinMaterial, in: Capsule())
+                    .padding(12)
+                    Spacer()
+                }
+            }
+            .clipShape(RoundedRectangle(cornerRadius: 24))
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Top-down incident replay at \(Int(snapshot.elapsed)) seconds")
+        .accessibilityValue(accessibilitySummary)
+    }
+
+    private func replayVehicle(colour: Color) -> some View {
+        RoundedRectangle(cornerRadius: 8)
+            .fill(colour)
+            .frame(width: 88, height: 42)
+            .overlay {
+                RoundedRectangle(cornerRadius: 5)
+                    .stroke(.white.opacity(0.35), lineWidth: 2)
+                    .padding(7)
+            }
+    }
+
+    private func casualtyNode(_ casualty: CasualtyReplayState) -> some View {
+        VStack(spacing: 3) {
+            ZStack {
+                Circle()
+                    .fill(conditionColour(casualty))
+                    .frame(width: 40, height: 40)
+                Image(systemName: casualty.isReceivingCPR ? "heart.fill" : "person.fill")
+                    .foregroundStyle(.white)
+            }
+            .overlay {
+                Circle()
+                    .stroke(
+                        snapshot.selectedCasualtyID == casualty.id ? Color.white : Color.clear,
+                        lineWidth: 4
+                    )
+                    .padding(-5)
+            }
+            HStack(spacing: 4) {
+                Text(casualty.name)
+                if let priority = casualty.assignedPriority {
+                    Text(priority.rawValue)
+                        .foregroundStyle(priority.colour)
+                }
+            }
+            .font(.caption2.bold())
+            .foregroundStyle(.white)
+        }
+    }
+
+    private func conditionColour(_ casualty: CasualtyReplayState) -> Color {
+        if casualty.isDeceased { return .gray }
+        if casualty.isReceivingCPR { return .green }
+        if casualty.health <= 25 { return .red }
+        if casualty.health <= 60 { return .orange }
+        return .blue
+    }
+
+    private func position(for casualtyID: String, in size: CGSize) -> CGPoint {
+        switch casualtyID {
+        case "casualty-a": CGPoint(x: size.width * 0.2, y: size.height * 0.42)
+        case "casualty-b": CGPoint(x: size.width * 0.5, y: size.height * 0.72)
+        default: CGPoint(x: size.width * 0.8, y: size.height * 0.4)
+        }
+    }
+
+    private var accessibilitySummary: String {
+        let pace = "exercise pace \(snapshot.scenarioPace.title)"
+        let scene = snapshot.sceneSurveyed ? "scene surveyed" : "scene survey pending"
+        let hazard = snapshot.hazardIdentified ? "fuel hazard identified" : "fuel hazard not identified"
+        let casualtyStates = snapshot.casualties.map { casualty in
+            let priority = casualty.assignedPriority?.rawValue ?? "untagged"
+            return "\(casualty.name), health \(Int(casualty.health.rounded())) percent, \(priority)"
+        }
+        return ([pace, scene, hazard] + casualtyStates).joined(separator: "; ")
     }
 }
 
@@ -1232,9 +1884,12 @@ struct ScoreCard: View {
 
 struct ImmersiveTriageView: View {
     @EnvironmentObject private var session: TrainingSession
+    @EnvironmentObject private var collaboration: IncidentCollaborationCoordinator
+    @EnvironmentObject private var spatialAssessment: SpatialAssessmentCoordinator
     @Environment(\.dismissImmersiveSpace) private var dismissImmersiveSpace
     @Environment(\.openWindow) private var openWindow
     @State private var spatialCPRIsHeld = false
+    @State private var isClosingForDebrief = false
 
     var body: some View {
         RealityView { content, attachments in
@@ -1262,9 +1917,11 @@ struct ImmersiveTriageView: View {
                 .onEnded { value in
                     let name = value.entity.name
                     if name.hasPrefix("casualty-") {
-                        session.selectCasualty(name)
+                        collaboration.submit(.selectCasualty(name))
                     } else if name == "fuel-hazard" {
-                        session.identifyHazard()
+                        collaboration.submit(.identifyHazard)
+                    } else {
+                        verifySimulatorAssessmentTarget(named: name)
                     }
                 }
         )
@@ -1273,17 +1930,36 @@ struct ImmersiveTriageView: View {
                 .targetedToAnyEntity()
                 .onChanged { value in
                     guard value.entity.name == "cpr-target-casualty-b",
-                          !spatialCPRIsHeld else { return }
+                          !spatialCPRIsHeld,
+                          session.casualties.first(where: { $0.id == "casualty-b" })?.isReceivingCPR != true else {
+                        return
+                    }
+                    let command = IncidentCommand.beginCPR("casualty-b")
+                    guard !collaboration.isShared
+                            || command.isPermitted(for: collaboration.localRole) else {
+                        collaboration.submit(command)
+                        return
+                    }
                     spatialCPRIsHeld = true
-                    session.beginCPR(for: "casualty-b")
+                    collaboration.submit(command)
                 }
                 .onEnded { value in
                     guard value.entity.name == "cpr-target-casualty-b",
                           spatialCPRIsHeld else { return }
                     spatialCPRIsHeld = false
-                    session.endCPR(for: "casualty-b")
+                    collaboration.submit(.endCPR("casualty-b", "Spatial compression hold released"))
                 }
         )
+        .task {
+            spatialAssessment.start()
+        }
+        .onDisappear {
+            spatialAssessment.stop()
+        }
+        .onChange(of: session.phase) { _, phase in
+            guard phase == .complete else { return }
+            closeForDebrief()
+        }
     }
 
     private var controlPosition: SIMD3<Float> {
@@ -1297,10 +1973,28 @@ struct ImmersiveTriageView: View {
 
     private func finishScenario() {
         guard session.phase == .active else { return }
-        session.end()
+        collaboration.submit(.end)
+        guard session.phase == .complete else { return }
+        closeForDebrief()
+    }
+
+    private func closeForDebrief() {
+        guard !isClosingForDebrief else { return }
+        isClosingForDebrief = true
         Task {
             await dismissImmersiveSpace()
             openWindow(id: "MainWindow")
+        }
+    }
+
+    private func verifySimulatorAssessmentTarget(named entityName: String) {
+        guard spatialAssessment.status == .simulator else { return }
+        for assessment in Assessment.allCases {
+            let prefix = "assessment-target-\(assessment.code)-"
+            guard entityName.hasPrefix(prefix) else { continue }
+            let casualtyID = String(entityName.dropFirst(prefix.count))
+            spatialAssessment.simulatorVerify(assessment, casualtyID: casualtyID)
+            return
         }
     }
 
@@ -1337,6 +2031,30 @@ struct ImmersiveTriageView: View {
                 ]
                 let targetScale: Float = casualty.isReceivingCPR ? 1.18 : 1
                 cprTarget.scale = [targetScale, targetScale, targetScale]
+            }
+            let nextAssessment = Assessment.allCases.first {
+                !casualty.completedAssessments.contains($0)
+            }
+            for assessment in Assessment.allCases {
+                guard let target = root.findEntity(
+                    named: "assessment-target-\(assessment.code)-\(casualty.id)"
+                ) as? ModelEntity else {
+                    continue
+                }
+                let isActive = session.selectedCasualtyID == casualty.id
+                    && nextAssessment == assessment
+                target.isEnabled = isActive
+                target.model?.materials = [
+                    SimpleMaterial(
+                        color: uiAssessmentColour(assessment),
+                        roughness: 0.25,
+                        isMetallic: false
+                    )
+                ]
+                let progressScale = isActive && spatialAssessment.activeAssessment == assessment
+                    ? Float(1 + (spatialAssessment.progress * 0.3))
+                    : 1
+                target.scale = [progressScale, progressScale, progressScale]
             }
         }
     }
@@ -1540,6 +2258,29 @@ struct ImmersiveTriageView: View {
         cprTarget.components.set(HoverEffectComponent())
         cprTarget.isEnabled = false
         casualty.addChild(cprTarget)
+
+        for assessment in Assessment.allCases {
+            let marker = ModelEntity(
+                mesh: .generateSphere(radius: 0.105),
+                materials: [
+                    SimpleMaterial(
+                        color: uiAssessmentColour(assessment),
+                        roughness: 0.25,
+                        isMetallic: false
+                    )
+                ]
+            )
+            marker.name = "assessment-target-\(assessment.code)-\(id)"
+            let offset = SpatialAssessmentCatalog.localOffset(for: assessment)
+            marker.position = [offset.x, offset.y, offset.z]
+            marker.components.set(InputTargetComponent())
+            marker.components.set(
+                CollisionComponent(shapes: [.generateSphere(radius: 0.16)])
+            )
+            marker.components.set(HoverEffectComponent())
+            marker.isEnabled = false
+            casualty.addChild(marker)
+        }
         return casualty
     }
 
@@ -1574,10 +2315,21 @@ struct ImmersiveTriageView: View {
         if casualty.health <= 25 { return .systemRed }
         return .systemOrange
     }
+
+    private func uiAssessmentColour(_ assessment: Assessment) -> UIColor {
+        switch assessment {
+        case .response: .systemBlue
+        case .breathing: .systemTeal
+        case .perfusion: .systemPink
+        case .injuries: .systemOrange
+        }
+    }
 }
 
 struct SpatialControlPanel: View {
     @EnvironmentObject private var session: TrainingSession
+    @EnvironmentObject private var collaboration: IncidentCollaborationCoordinator
+    @EnvironmentObject private var spatialAssessment: SpatialAssessmentCoordinator
     private var finishAction: () -> Void = {}
 
     func onFinish(_ action: @escaping () -> Void) -> SpatialControlPanel {
@@ -1588,17 +2340,44 @@ struct SpatialControlPanel: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            NextActionCard(action: session.nextRecommendedAction, compact: true)
+            HStack(spacing: 10) {
+                Label(collaboration.localRole.title, systemImage: collaboration.localRole.icon)
+                    .font(.caption.bold())
+                Label(session.scenarioPace.title, systemImage: "gauge.with.dots.needle.50percent")
+                    .font(.caption.bold())
+                    .foregroundStyle(.secondary)
+                Spacer()
+                if collaboration.isShared {
+                    Label("\(collaboration.participantCount) live", systemImage: "shareplay")
+                        .font(.caption.bold())
+                        .foregroundStyle(.green)
+                } else {
+                    Label("Solo", systemImage: "person.fill")
+                        .font(.caption.bold())
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            if let notice = collaboration.notice {
+                Label(notice, systemImage: "info.circle.fill")
+                    .font(.caption.bold())
+                    .foregroundStyle(.orange)
+            }
+
+            if session.selectedCasualty == nil {
+                NextActionCard(action: session.nextRecommendedAction, compact: true)
+            }
 
             if let casualty = session.selectedCasualty {
                 HStack {
                     VStack(alignment: .leading) {
                         Text(casualty.name).font(.title.bold())
-                        Text(casualty.isDeteriorated ? "Condition changed — reassess" : casualty.location)
+                        Text(casualty.isDeteriorated ? "Condition changed - reassess" : casualty.location)
                             .foregroundStyle(casualty.isDeteriorated ? .red : .secondary)
                     }
                     Spacer()
-                    Button { session.closeCasualty() } label: { Image(systemName: "xmark.circle.fill") }
+                    Button { collaboration.submit(.closeCasualty) } label: { Image(systemName: "xmark.circle.fill") }
+                        .accessibilityLabel("Close casualty details")
                 }
 
                 VStack(alignment: .leading, spacing: 8) {
@@ -1676,19 +2455,7 @@ struct SpatialControlPanel: View {
                         .foregroundStyle(.orange)
                 }
 
-                ForEach(Assessment.allCases) { assessment in
-                    Button { session.perform(assessment) } label: {
-                        HStack {
-                            Label(assessment.rawValue, systemImage: assessment.icon)
-                            Spacer()
-                            if casualty.completedAssessments.contains(assessment) {
-                                Text(casualty.finding(for: assessment)).font(.caption).foregroundStyle(.secondary)
-                                Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
-                            }
-                        }
-                    }
-                    .buttonStyle(.bordered)
-                }
+                SpatialAssessmentGuideView(casualty: casualty)
 
                 Divider()
                 Text("Assign triage priority").font(.headline)
@@ -1703,7 +2470,7 @@ struct SpatialControlPanel: View {
                 HStack {
                     ForEach(TriagePriority.allCases) { priority in
                         Button {
-                            session.assign(priority)
+                            collaboration.submit(.assignPriority(casualty.id, priority))
                         } label: {
                             VStack(spacing: 2) {
                                 Text(priority.rawValue).bold()
@@ -1727,15 +2494,15 @@ struct SpatialControlPanel: View {
                 Text("Survey the scene, then look at a casualty or the yellow fuel spill and pinch.")
                     .foregroundStyle(.secondary)
                 HStack {
-                    Button { session.markSurveyComplete() } label: {
+                    Button { collaboration.submit(.markSurveyComplete) } label: {
                         Label(session.sceneSurveyed ? "Surveyed" : "360° survey", systemImage: "view.360")
                     }
                     .disabled(session.sceneSurveyed)
-                    Button { session.communicateHazard() } label: {
+                    Button { collaboration.submit(.communicateHazard) } label: {
                         Label(session.hazardCommunicated ? "Reported" : "Report hazard", systemImage: "radio")
                     }
                     .disabled(!session.hazardIdentified || session.hazardCommunicated)
-                    Button { session.requestResources() } label: {
+                    Button { collaboration.submit(.requestResources) } label: {
                         Label(session.resourceRequestSent ? "Requested" : "Resources", systemImage: "person.3.fill")
                     }
                     .disabled(session.resourceRequestSent)
@@ -1769,8 +2536,132 @@ struct SpatialControlPanel: View {
     }
 }
 
+struct SpatialAssessmentGuideView: View {
+    @EnvironmentObject private var spatialAssessment: SpatialAssessmentCoordinator
+    let casualty: Casualty
+
+    private var nextAssessment: Assessment? {
+        Assessment.allCases.first { !casualty.completedAssessments.contains($0) }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Label(spatialAssessment.status.title, systemImage: statusIcon)
+                    .font(.headline)
+                    .foregroundStyle(statusColour)
+                Spacer()
+                Text("\(casualty.completedAssessments.count)/\(Assessment.allCases.count) verified")
+                    .font(.caption.bold())
+                    .foregroundStyle(.secondary)
+            }
+
+            Text(spatialAssessment.status.detail)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            if case .unavailable = spatialAssessment.status {
+                Button {
+                    spatialAssessment.start()
+                } label: {
+                    Label("Retry hand tracking", systemImage: "arrow.clockwise")
+                }
+                .buttonStyle(.bordered)
+            }
+
+            if let nextAssessment {
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack {
+                        Label(nextAssessment.rawValue, systemImage: nextAssessment.icon)
+                            .font(.headline)
+                        Spacer()
+                        Text("NEXT")
+                            .font(.caption2.bold())
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(.blue, in: Capsule())
+                    }
+                    Text(nextAssessment.spatialInstruction)
+                        .font(.caption)
+                    ProgressView(
+                        value: spatialAssessment.activeAssessment == nextAssessment
+                            ? spatialAssessment.progress
+                            : 0
+                    )
+                    .tint(.blue)
+                    if let proximity = spatialAssessment.proximityMetres,
+                       spatialAssessment.activeAssessment == nextAssessment {
+                        Text("Tracked hand is \(String(format: "%.2f", proximity)) m from the marker")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .padding(12)
+                .background(.blue.opacity(0.1), in: RoundedRectangle(cornerRadius: 14))
+            }
+
+            LazyVGrid(
+                columns: [GridItem(.flexible()), GridItem(.flexible())],
+                alignment: .leading,
+                spacing: 8
+            ) {
+                ForEach(Assessment.allCases) { assessment in
+                    HStack(alignment: .top, spacing: 10) {
+                        Image(
+                            systemName: casualty.completedAssessments.contains(assessment)
+                                ? "checkmark.seal.fill"
+                                : "circle.dashed"
+                        )
+                        .foregroundStyle(casualty.completedAssessments.contains(assessment) ? .green : .secondary)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(assessment.rawValue)
+                                .font(.subheadline.bold())
+                            if casualty.completedAssessments.contains(assessment) {
+                                Text(casualty.finding(for: assessment))
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            } else {
+                                Text("Awaiting verified spatial evidence")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(8)
+                    .background(.white.opacity(0.04), in: RoundedRectangle(cornerRadius: 10))
+                }
+            }
+        }
+        .padding(12)
+        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 16))
+    }
+
+    private var statusIcon: String {
+        switch spatialAssessment.status {
+        case .tracking: "hand.raised.fingers.spread.fill"
+        case .simulator: "visionpro.fill"
+        case .unavailable: "hand.raised.slash.fill"
+        case .starting: "waveform.path"
+        case .idle: "hand.raised.fill"
+        }
+    }
+
+    private var statusColour: Color {
+        switch spatialAssessment.status {
+        case .tracking: .green
+        case .simulator: .blue
+        case .unavailable: .red
+        case .starting: .orange
+        case .idle: .secondary
+        }
+    }
+}
+
 struct CPRHoldControl: View {
     @EnvironmentObject private var session: TrainingSession
+    @EnvironmentObject private var collaboration: IncidentCollaborationCoordinator
     let casualtyID: String
     @State private var isHolding = false
 
@@ -1819,25 +2710,43 @@ struct CPRHoldControl: View {
             .gesture(
                 DragGesture(minimumDistance: 0)
                     .onChanged { _ in
-                        guard !isHolding else { return }
-                        isHolding = true
-                        session.beginCPR(for: casualtyID)
+                        startCPR()
                     }
                     .onEnded { _ in
-                        guard isHolding else { return }
-                        isHolding = false
-                        session.endCPR(for: casualtyID)
+                        stopCPR()
                     }
             )
             .accessibilityLabel("CPR compression target")
             .accessibilityHint("Pinch and hold to maintain effective CPR")
             .accessibilityAddTraits(.isButton)
+            .accessibilityAction(named: "Start CPR") {
+                startCPR()
+            }
+            .accessibilityAction(named: "Stop CPR") {
+                stopCPR()
+            }
         }
         .onDisappear {
-            guard isHolding || casualty?.isReceivingCPR == true else { return }
-            isHolding = false
-            session.endCPR(for: casualtyID)
+            guard isHolding else { return }
+            stopCPR()
         }
+    }
+
+    private func startCPR() {
+        let command = IncidentCommand.beginCPR(casualtyID)
+        guard !isHolding, casualty?.isReceivingCPR != true else { return }
+        guard !collaboration.isShared || command.isPermitted(for: collaboration.localRole) else {
+            collaboration.submit(command)
+            return
+        }
+        isHolding = true
+        collaboration.submit(command)
+    }
+
+    private func stopCPR() {
+        guard isHolding else { return }
+        isHolding = false
+        collaboration.submit(.endCPR(casualtyID, "Compression hold released"))
     }
 
     private func format(_ time: TimeInterval) -> String {
@@ -1845,3 +2754,115 @@ struct CPRHoldControl: View {
         return String(format: "%02d:%02d", seconds / 60, seconds % 60)
     }
 }
+
+#if DEBUG
+private enum TriagePreviewFixtures {
+    static let replayEvidence: [DecisionEvidence] = {
+        let initialCasualties = replayCasualties(jordanPriority: nil)
+        let incorrectSnapshot = IncidentReplaySnapshot(
+            elapsed: 28,
+            scenarioPace: .demo,
+            selectedCasualtyID: "casualty-b",
+            sceneSurveyed: true,
+            hazardIdentified: true,
+            hazardCommunicated: false,
+            resourceRequestSent: false,
+            casualties: initialCasualties
+        )
+        let correctedSnapshot = IncidentReplaySnapshot(
+            elapsed: 36,
+            scenarioPace: .demo,
+            selectedCasualtyID: "casualty-b",
+            sceneSurveyed: true,
+            hazardIdentified: true,
+            hazardCommunicated: true,
+            resourceRequestSent: true,
+            casualties: replayCasualties(jordanPriority: .p1)
+        )
+
+        return [
+            DecisionEvidence(
+                elapsed: 28,
+                category: "Triage",
+                action: "Tagged Jordan as P3 - Delayed.",
+                actorRole: .triageOfficer,
+                outcome: .needsReview,
+                rationale: "P3 does not match absent breathing and perfusion evidence. Jordan requires P1 - Immediate.",
+                cues: [
+                    "Check response: Unresponsive to voice and pain.",
+                    "Check breathing: Not breathing normally.",
+                    "Check perfusion: No palpable pulse."
+                ],
+                consequence: "The mismatch could delay life-saving care.",
+                recommendedAction: "Retag Jordan as P1 and maintain continuous CPR.",
+                snapshot: incorrectSnapshot
+            ),
+            DecisionEvidence(
+                elapsed: 36,
+                category: "Triage",
+                action: "Retagged Jordan as P1 - Immediate.",
+                actorRole: .triageOfficer,
+                outcome: .corrected,
+                rationale: "P1 matches the verified response, breathing, and perfusion evidence.",
+                cues: ["Absent spontaneous breathing", "Absent spontaneous circulation"],
+                consequence: "Jordan entered the immediate treatment queue.",
+                snapshot: correctedSnapshot
+            )
+        ]
+    }()
+
+    private static func replayCasualties(
+        jordanPriority: TriagePriority?
+    ) -> [CasualtyReplayState] {
+        [
+            CasualtyReplayState(
+                id: "casualty-a",
+                name: "Alex",
+                health: 100,
+                assignedPriority: .p1,
+                correctPriority: .p1,
+                completedAssessments: Set(Assessment.allCases),
+                isReceivingCPR: false,
+                isDeceased: false,
+                conditionLabel: "Unconscious but physiologically stable"
+            ),
+            CasualtyReplayState(
+                id: "casualty-b",
+                name: "Jordan",
+                health: 48,
+                assignedPriority: jordanPriority,
+                correctPriority: .p1,
+                completedAssessments: ScenarioRules.primaryAssessments,
+                isReceivingCPR: true,
+                isDeceased: false,
+                conditionLabel: "CPR in progress"
+            ),
+            CasualtyReplayState(
+                id: "casualty-c",
+                name: "Sam",
+                health: 50,
+                assignedPriority: .p2,
+                correctPriority: .p2,
+                completedAssessments: Set(Assessment.allCases),
+                isReceivingCPR: false,
+                isDeceased: false,
+                conditionLabel: "Injured - stable"
+            )
+        ]
+    }
+}
+
+#Preview("Evidence replay") {
+    ScrollView {
+        DecisionReplayView(evidence: TriagePreviewFixtures.replayEvidence)
+            .padding(30)
+    }
+    .frame(width: 920, height: 720)
+}
+
+#Preview("Evidence replay empty") {
+    DecisionReplayView(evidence: [])
+        .padding(30)
+        .frame(width: 920, height: 720)
+}
+#endif
