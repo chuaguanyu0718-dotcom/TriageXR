@@ -1345,16 +1345,17 @@ struct ImmersiveTriageView: View {
         let root = Entity()
         root.name = "scene-root"
 
-        let floor = ModelEntity(
-            mesh: .generatePlane(width: 8, depth: 8),
-            materials: [SimpleMaterial(color: UIColor(white: 0.22, alpha: 0.55), isMetallic: false)]
-        )
-        floor.position = [0, -1.35, -3.1]
-        root.addChild(floor)
+        if let texture = try? await TextureResource(named: "RoadsidePanorama") {
+            var panoramaMaterial = UnlitMaterial()
+            panoramaMaterial.color = .init(texture: .init(texture))
+            panoramaMaterial.faceCulling = .front
+            let panorama = ModelEntity(mesh: .generateSphere(radius: 32), materials: [panoramaMaterial])
+            panorama.name = "roadside-panorama"
+            panorama.position = [0, 2.2, -3]
+            root.addChild(panorama)
+        }
 
-        let roadLine = ModelEntity(mesh: .generateBox(width: 0.12, height: 0.01, depth: 6.5), materials: [SimpleMaterial(color: .white, isMetallic: false)])
-        roadLine.position = [0, -1.33, -3.1]
-        root.addChild(roadLine)
+        addRoadEnvironment(to: root)
 
         root.addChild(await makeVehicle(position: [-2.4, -1.28, -4.2], rotation: -0.22))
         root.addChild(await makeVehicle(position: [2.0, -1.28, -4.4], rotation: 0.3))
@@ -1368,6 +1369,72 @@ struct ImmersiveTriageView: View {
 
     private func sceneAsset(named name: String) async -> Entity? {
         try? await Entity(named: name, in: .main)
+    }
+
+    private func addRoadEnvironment(to root: Entity) {
+        let grass = ModelEntity(
+            mesh: .generatePlane(width: 54, depth: 70),
+            materials: [SimpleMaterial(color: UIColor(red: 0.23, green: 0.34, blue: 0.15, alpha: 1), roughness: 1, isMetallic: false)]
+        )
+        grass.position = [0, -1.39, -27]
+        root.addChild(grass)
+
+        let road = ModelEntity(
+            mesh: .generatePlane(width: 7.2, depth: 70),
+            materials: [SimpleMaterial(color: UIColor(red: 0.105, green: 0.115, blue: 0.12, alpha: 1), roughness: 0.92, isMetallic: false)]
+        )
+        road.position = [0, -1.35, -27]
+        root.addChild(road)
+
+        let gravel = SimpleMaterial(color: UIColor(red: 0.34, green: 0.31, blue: 0.26, alpha: 1), roughness: 1, isMetallic: false)
+        for x: Float in [-4.55, 4.55] {
+            let shoulder = ModelEntity(mesh: .generatePlane(width: 1.9, depth: 70), materials: [gravel])
+            shoulder.position = [x, -1.365, -27]
+            root.addChild(shoulder)
+        }
+
+        let white = SimpleMaterial(color: UIColor(white: 0.9, alpha: 1), isMetallic: false)
+        let yellow = SimpleMaterial(color: UIColor(red: 0.94, green: 0.68, blue: 0.08, alpha: 1), isMetallic: false)
+        for x: Float in [-3.25, 3.25] {
+            let edgeLine = ModelEntity(mesh: .generateBox(width: 0.10, height: 0.012, depth: 70), materials: [white])
+            edgeLine.position = [x, -1.335, -27]
+            root.addChild(edgeLine)
+        }
+        for z in stride(from: Float(-1.5), through: Float(-61), by: -4.2) {
+            let dash = ModelEntity(mesh: .generateBox(width: 0.11, height: 0.014, depth: 2.3), materials: [yellow])
+            dash.position = [0, -1.33, z]
+            root.addChild(dash)
+        }
+
+        addGuardrail(to: root, x: 5.75)
+        for (x, z) in [(-2.8 as Float, -1.8 as Float), (-2.35, -2.25), (2.8, -2.5), (2.45, -3.05)] {
+            root.addChild(makeTrafficCone(position: [x, -1.12, z]))
+        }
+    }
+
+    private func addGuardrail(to root: Entity, x: Float) {
+        let metal = SimpleMaterial(color: UIColor(red: 0.45, green: 0.48, blue: 0.49, alpha: 1), roughness: 0.45, isMetallic: true)
+        let rail = ModelEntity(mesh: .generateBox(width: 0.14, height: 0.24, depth: 24), materials: [metal])
+        rail.position = [x, -0.78, -14]
+        root.addChild(rail)
+        for z in stride(from: Float(-2), through: Float(-26), by: -2.5) {
+            let post = ModelEntity(mesh: .generateBox(width: 0.12, height: 1.05, depth: 0.12), materials: [metal])
+            post.position = [x, -0.92, z]
+            root.addChild(post)
+        }
+    }
+
+    private func makeTrafficCone(position: SIMD3<Float>) -> Entity {
+        let cone = Entity()
+        cone.position = position
+        let orange = SimpleMaterial(color: .systemOrange, roughness: 0.75, isMetallic: false)
+        let rubber = SimpleMaterial(color: UIColor(white: 0.07, alpha: 1), roughness: 0.95, isMetallic: false)
+        let base = ModelEntity(mesh: .generateBox(width: 0.34, height: 0.055, depth: 0.34, cornerRadius: 0.025), materials: [rubber])
+        let body = ModelEntity(mesh: .generateCone(height: 0.48, radius: 0.15), materials: [orange])
+        body.position.y = 0.26
+        cone.addChild(base)
+        cone.addChild(body)
+        return cone
     }
 
     private func makeVehicle(position: SIMD3<Float>, rotation: Float) async -> Entity {
@@ -1384,8 +1451,22 @@ struct ImmersiveTriageView: View {
         }
 
         vehicle.position.y += 0.53
-        let body = ModelEntity(mesh: .generateBox(width: 1.7, height: 0.75, depth: 0.85, cornerRadius: 0.12), materials: [SimpleMaterial(color: .darkGray, isMetallic: true)])
+        let paint = SimpleMaterial(color: .darkGray, roughness: 0.28, isMetallic: true)
+        let body = ModelEntity(mesh: .generateBox(width: 1.85, height: 0.62, depth: 0.9, cornerRadius: 0.12), materials: [paint])
         vehicle.addChild(body)
+        let cabin = ModelEntity(mesh: .generateBox(width: 0.9, height: 0.48, depth: 0.78, cornerRadius: 0.09), materials: [paint])
+        cabin.position = [-0.25, 0.48, 0]
+        vehicle.addChild(cabin)
+        let glass = SimpleMaterial(color: UIColor(red: 0.08, green: 0.14, blue: 0.17, alpha: 0.92), roughness: 0.15, isMetallic: true)
+        for z: Float in [-0.405, 0.405] {
+            let window = ModelEntity(mesh: .generateBox(width: 0.72, height: 0.28, depth: 0.018, cornerRadius: 0.025), materials: [glass])
+            window.position = [-0.25, 0.5, z]
+            vehicle.addChild(window)
+        }
+        let bumper = ModelEntity(mesh: .generateBox(width: 0.12, height: 0.15, depth: 0.94), materials: [SimpleMaterial(color: .darkGray, isMetallic: true)])
+        bumper.position = [0.96, -0.18, 0]
+        bumper.orientation = simd_quatf(angle: 0.15, axis: [0, 0, 1])
+        vehicle.addChild(bumper)
         for x: Float in [-0.55, 0.55] {
             for z: Float in [-0.47, 0.47] {
                 let wheel = ModelEntity(mesh: .generateCylinder(height: 0.16, radius: 0.18), materials: [SimpleMaterial(color: .black, isMetallic: false)])

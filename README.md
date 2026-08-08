@@ -24,6 +24,14 @@ The experience follows the product storyboard:
 
 The yellow fuel spill is interactive. After identifying it, use the incident panel to report it and request resources.
 
+## Roadside environment
+
+The immersive incident uses a performance-conscious hybrid environment:
+
+- An original 360° photographic panorama supplies the distant sky, terrain, trees, utility poles, and roadside context.
+- RealityKit geometry supplies the nearby asphalt road, gravel shoulders, grass verges, edge lines, centre markings, guardrail, traffic cones, crash vehicles, hazard, and casualties.
+- The panorama is unlit to maintain clear, consistent visibility. Nearby geometry uses simple materials and repeated low-poly meshes to keep the scene responsive on Vision Pro.
+
 The initial coach runs locally from the structured event log. This keeps feedback deterministic and testable; a hosted language model can later rewrite the verified findings without becoming the source of truth.
 
 ## 3D assets
