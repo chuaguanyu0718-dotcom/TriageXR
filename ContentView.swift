@@ -5,6 +5,7 @@ import AVFoundation
 import Combine
 import ARKit
 import GroupActivities
+import UniformTypeIdentifiers
 import os
 
 // MARK: - App
@@ -26,7 +27,7 @@ struct TriageXRApp: App {
         spatialAssessment.installSurveyPermissionProvider { [weak collaboration] in
             guard let collaboration else { return false }
             return !collaboration.isShared
-                || IncidentCommand.inspectSurveyCheckpoint(.forward)
+                || IncidentCommand.recordSurveyCoverage([])
                     .isPermitted(for: collaboration.localRole)
         }
         _session = StateObject(wrappedValue: session)
@@ -86,6 +87,7 @@ struct RecommendedAction {
 
 @MainActor
 final class TrainingSession: ObservableObject {
+    let scenario = ScenarioCatalog.roadsideFoundation
     @Published var phase: ScenarioPhase = .briefing
     @Published var scenarioPace: ScenarioPace = .demo
     @Published var casualties: [Casualty] = TrainingSession.makeCasualties()
@@ -93,6 +95,7 @@ final class TrainingSession: ObservableObject {
     @Published var hazardIdentified = false
     @Published var hazardCommunicated = false
     @Published var surveyedCheckpoints: Set<SurveyCheckpoint> = []
+    @Published var surveyCoverageBins: Set<Int> = []
     @Published var resourceRequestSent = false
     @Published var deteriorationTriggered = false
     @Published var events: [SessionEvent] = []
@@ -104,6 +107,7 @@ final class TrainingSession: ObservableObject {
     private var lastTickAt: Date?
     private var timer: Timer?
     private let voice = AVSpeechSynthesizer()
+    private var cuePlayer: AVAudioPlayer?
     private var currentActorRole: ResponderRole = .incidentCommander
     var didChange: ((SharedIncidentSnapshot) -> Void)?
 
@@ -123,14 +127,18 @@ final class TrainingSession: ObservableObject {
     var canComplete: Bool { taggedCount == casualties.count }
 
     var sceneSurveyed: Bool {
-        SurveyCheckpoint.required.isSubset(of: surveyedCheckpoints)
+        SurveyCoverage.allBins.isSubset(of: surveyCoverageBins)
+    }
+
+    var surveyCoverageFraction: Double {
+        SurveyCoverage.fractionCovered(surveyCoverageBins)
     }
 
     var nextRecommendedAction: RecommendedAction {
         if !sceneSurveyed {
             return RecommendedAction(
                 title: "Survey the scene",
-                detail: "Turn naturally and hold your view in each sector; the headset verifies coverage automatically (\(surveyedCheckpoints.count)/\(SurveyCheckpoint.required.count)).",
+                detail: "Turn naturally and hold a level view. Headset direction fills the coverage map automatically (\(Int((surveyCoverageFraction * 100).rounded()))%).",
                 icon: "view.360",
                 colour: .orange
             )
@@ -226,6 +234,8 @@ final class TrainingSession: ObservableObject {
             setScenarioPace(pace)
         case .inspectSurveyCheckpoint(let checkpoint):
             inspectSurveyCheckpoint(checkpoint)
+        case .recordSurveyCoverage(let bins):
+            recordSurveyCoverage(bins)
         case .identifyHazard:
             identifyHazard()
         case .communicateHazard:
@@ -279,6 +289,7 @@ final class TrainingSession: ObservableObject {
             hazardIdentified: hazardIdentified,
             hazardCommunicated: hazardCommunicated,
             surveyedCheckpoints: surveyedCheckpoints,
+            surveyCoverageBins: surveyCoverageBins,
             resourceRequestSent: resourceRequestSent,
             deteriorationTriggered: deteriorationTriggered,
             events: events,
@@ -302,6 +313,7 @@ final class TrainingSession: ObservableObject {
         hazardIdentified = snapshot.hazardIdentified
         hazardCommunicated = snapshot.hazardCommunicated
         surveyedCheckpoints = snapshot.surveyedCheckpoints
+        surveyCoverageBins = snapshot.surveyCoverageBins
         resourceRequestSent = snapshot.resourceRequestSent
         deteriorationTriggered = snapshot.deteriorationTriggered
         events = snapshot.events
@@ -317,6 +329,7 @@ final class TrainingSession: ObservableObject {
         hazardIdentified = false
         hazardCommunicated = false
         surveyedCheckpoints = []
+        surveyCoverageBins = []
         resourceRequestSent = false
         deteriorationTriggered = false
         events = []
@@ -327,7 +340,7 @@ final class TrainingSession: ObservableObject {
         lastTickAt = Date()
         record(
             "Scenario",
-            "Road traffic collision scenario started.",
+            "\(scenario.title) started (content v\(scenario.version)).",
             outcome: "Scenario active",
             evidenceOutcome: .scenarioUpdate,
             rationale: "The briefing establishes three casualties, an unknown roadside hazard, and a time-critical cardiac arrest.",
@@ -339,6 +352,7 @@ final class TrainingSession: ObservableObject {
             ],
             consequence: "The incident clock and untreated deterioration clock started."
         )
+        speak("Dispatch. Three casualties reported. Survey the scene before approach.")
         startTimer()
     }
 
@@ -390,30 +404,53 @@ final class TrainingSession: ObservableObject {
     }
 
     func inspectSurveyCheckpoint(_ checkpoint: SurveyCheckpoint) {
+        recordSurveyCoverage(Array(SurveyCoverage.requiredBins(for: checkpoint)))
+    }
+
+    func recordSurveyCoverage(_ bins: [Int]) {
         guard phase == .active else { return }
-        let wasNew = surveyedCheckpoints.insert(checkpoint).inserted
-        guard wasNew else { return }
-        let inspectedCount = surveyedCheckpoints.count
+        let validBins = Set(bins).intersection(SurveyCoverage.allBins)
+        let newlyCovered = validBins.subtracting(surveyCoverageBins)
+        guard !newlyCovered.isEmpty else { return }
+
+        let previousCheckpoints = surveyedCheckpoints
+        surveyCoverageBins.formUnion(newlyCovered)
+        surveyedCheckpoints.formUnion(
+            SurveyCoverage.completedCheckpoints(for: surveyCoverageBins)
+        )
+        let newlyCompleted = surveyedCheckpoints.subtracting(previousCheckpoints)
         let isComplete = sceneSurveyed
+        let percent = Int((surveyCoverageFraction * 100).rounded())
+        let completedTitles = newlyCompleted
+            .sorted { $0.rawValue < $1.rawValue }
+            .map(\.shortTitle)
+            .joined(separator: ", ")
         record(
             "Safety",
             isComplete
-                ? "Head orientation verified the \(checkpoint.title.lowercased()) and completed the 360° scene survey."
-                : "Head orientation verified a deliberate view of the \(checkpoint.title.lowercased()).",
+                ? "Head-direction coverage completed the deliberate 360° scene survey."
+                : completedTitles.isEmpty
+                    ? "Head direction added detail to the continuous scene-coverage map."
+                    : "Head direction verified the \(completedTitles) survey zone\(newlyCompleted.count == 1 ? "" : "s").",
             positive: true,
             outcome: isComplete
-                ? "360° scan verified"
-                : "Survey \(inspectedCount) of \(SurveyCheckpoint.required.count)",
+                ? "360° coverage verified"
+                : "Survey coverage \(percent)%",
             evidenceOutcome: .succeeded,
-            rationale: "A stable headset pose sustained in each direction provides observable evidence of a deliberate physical scan before scene entry.",
-            cues: [checkpoint.spatialCue, "Stable view held for at least \(String(format: "%.1f", SceneSurveyEngine.requiredDwellDuration)) seconds", "\(inspectedCount) of \(SurveyCheckpoint.required.count) sectors verified"],
+            rationale: "Stable, level headset orientation provides observable evidence of deliberate head movement before scene entry; it does not claim eye-gaze or object recognition.",
+            cues: [
+                "\(newlyCovered.count) new 30-degree coverage segment\(newlyCovered.count == 1 ? "" : "s")",
+                "Stable view held for at least \(String(format: "%.1f", SceneSurveyEngine.requiredDwellDuration)) seconds",
+                "\(surveyCoverageBins.count) of \(SurveyCoverage.binCount) segments covered"
+            ],
             consequence: isComplete
-                ? "Every scene direction received deliberate, observable visual coverage before patient contact."
-                : "The \(checkpoint.title.lowercased()) was added to the verified scene survey without a button press.",
+                ? "All head-direction segments received deliberate coverage before patient contact."
+                : "The coverage map advanced automatically without a survey button.",
             recommendedAction: isComplete
                 ? nil
-                : "Continue turning through the scene and briefly hold your view in every remaining sector."
+                : "Continue turning through uncovered directions and briefly hold a level view."
         )
+        playCue(named: isComplete ? "SurveyComplete" : "SurveyConfirm")
     }
 
     func identifyHazard() {
@@ -429,6 +466,7 @@ final class TrainingSession: ObservableObject {
             cues: ["Yellow liquid at vehicle", "Collision damage", "No fire crew on scene"],
             consequence: "The fuel area was treated as an exclusion zone."
         )
+        playCue(named: "HazardAlert")
     }
 
     func communicateHazard() {
@@ -644,6 +682,64 @@ final class TrainingSession: ObservableObject {
             triage: triage,
             treatment: treatment,
             communication: communication
+        )
+    }
+
+    var instructorReport: InstructorSessionReport {
+        let assessmentCount = casualties.reduce(0) { $0 + $1.completedAssessments.count }
+        let assessmentMaximum = casualties.count * Assessment.allCases.count
+        let correctTags = casualties.filter { $0.assignedPriority == $0.currentCorrectPriority }.count
+        let coordinationComplete = hazardCommunicated && resourceRequestSent
+        return InstructorSessionReport(
+            schemaVersion: InstructorSessionReport.schemaVersion,
+            scenarioID: scenario.id,
+            scenarioVersion: scenario.version,
+            scenarioTitle: scenario.title,
+            scenarioPace: scenarioPace,
+            exerciseElapsedSeconds: elapsed,
+            score: score,
+            surveyCoveragePercent: Int((surveyCoverageFraction * 100).rounded()),
+            coveredSurveyBins: surveyCoverageBins.sorted(),
+            competencies: [
+                InstructorCompetencyResult(
+                    id: "scene-safety",
+                    title: "Scene safety",
+                    status: sceneSurveyed && hazardIdentified ? "Demonstrated" : "Needs review",
+                    evidence: "\(surveyCoverageBins.count)/\(SurveyCoverage.binCount) head-direction segments; hazard \(hazardIdentified ? "identified" : "not identified")."
+                ),
+                InstructorCompetencyResult(
+                    id: "systematic-assessment",
+                    title: "Systematic assessment",
+                    status: assessmentCount == assessmentMaximum ? "Demonstrated" : "Developing",
+                    evidence: "\(assessmentCount)/\(assessmentMaximum) spatial assessment steps verified."
+                ),
+                InstructorCompetencyResult(
+                    id: "triage-reasoning",
+                    title: "Triage reasoning",
+                    status: correctTags == casualties.count ? "Demonstrated" : "Needs review",
+                    evidence: "\(correctTags)/\(casualties.count) final priorities matched scenario evidence."
+                ),
+                InstructorCompetencyResult(
+                    id: "coordination",
+                    title: "Communication and coordination",
+                    status: coordinationComplete ? "Demonstrated" : "Developing",
+                    evidence: "Hazard report \(hazardCommunicated ? "sent" : "missing"); resource request \(resourceRequestSent ? "sent" : "missing")."
+                )
+            ],
+            casualties: casualties.map {
+                InstructorCasualtyResult(
+                    id: $0.id,
+                    name: $0.name,
+                    assignedPriority: $0.assignedPriority,
+                    expectedPriority: $0.currentCorrectPriority,
+                    completedAssessments: $0.completedAssessments,
+                    effectiveCPRSeconds: $0.effectiveCPRSeconds,
+                    outcome: $0.conditionLabel
+                )
+            },
+            events: debriefEvents,
+            decisionEvidence: decisionEvidence,
+            trainingBoundary: scenario.trainingBoundary
         )
     }
 
@@ -933,54 +1029,27 @@ final class TrainingSession: ObservableObject {
             : String(format: "%d:%02d", seconds / 60, seconds % 60)
     }
 
+    private func playCue(named name: String) {
+        guard let url = Bundle.main.url(forResource: name, withExtension: "wav") else { return }
+        do {
+            cuePlayer = try AVAudioPlayer(contentsOf: url)
+            cuePlayer?.volume = 0.7
+            cuePlayer?.prepareToPlay()
+            cuePlayer?.play()
+        } catch {
+            // Audio feedback supplements the visual state; training continues safely.
+        }
+    }
+
+    private func speak(_ message: String) {
+        let utterance = AVSpeechUtterance(string: message)
+        utterance.rate = 0.48
+        utterance.volume = 0.88
+        voice.speak(utterance)
+    }
+
     static func makeCasualties() -> [Casualty] {
-        [
-            Casualty(
-                id: "casualty-a", name: "Alex", location: "Near the blue marker",
-                initialFindings: [
-                    .response: "Unresponsive to voice and pain.", .breathing: "12 breaths/minute and regular.",
-                    .perfusion: "Radial pulse present; skin warm.", .injuries: "No visible external injury."
-                ],
-                deterioratedFindings: [:],
-                correctInitialPriority: .p1,
-                correctDeterioratedPriority: nil,
-                initialHealth: 100,
-                deteriorationProfile: .none,
-                health: 100
-            ),
-            Casualty(
-                id: "casualty-b", name: "Jordan", location: "Beside the purple marker",
-                initialFindings: [
-                    .response: "Unresponsive to voice and pain.", .breathing: "Not breathing normally.",
-                    .perfusion: "No palpable pulse or spontaneous circulation.", .injuries: "No obvious external injury."
-                ],
-                deterioratedFindings: [
-                    .response: "Unresponsive to voice and pain.", .breathing: "Not breathing normally.",
-                    .perfusion: "No palpable pulse or spontaneous circulation.", .injuries: "Visible oxygen-deprivation signs are worsening."
-                ],
-                correctInitialPriority: .p1,
-                correctDeterioratedPriority: .p1,
-                initialHealth: 60,
-                deteriorationProfile: .untreatedCardiacArrest(
-                    neurologicalRiskAfter: ScenarioRules.neurologicalRiskAfter,
-                    deathAfter: ScenarioRules.deathAfter
-                ),
-                health: 60
-            ),
-            Casualty(
-                id: "casualty-c", name: "Sam", location: "Near the teal marker",
-                initialFindings: [
-                    .response: "Alert and follows commands.", .breathing: "20 breaths/minute and regular.",
-                    .perfusion: "Radial pulse present; capillary refill 2 seconds.", .injuries: "Visible limb injury with controlled bleeding."
-                ],
-                deterioratedFindings: [:],
-                correctInitialPriority: .p2,
-                correctDeterioratedPriority: nil,
-                initialHealth: 50,
-                deteriorationProfile: .none,
-                health: 50
-            )
-        ]
+        ScenarioCatalog.roadsideFoundation.makeCasualties()
     }
 }
 
@@ -1082,6 +1151,7 @@ struct ScenarioActiveView: View {
 }
 
 struct BriefingView: View {
+    @EnvironmentObject private var session: TrainingSession
     @EnvironmentObject private var collaboration: IncidentCollaborationCoordinator
     let beginAction: () -> Void
 
@@ -1093,9 +1163,9 @@ struct BriefingView: View {
                         .font(.system(size: 56))
                         .foregroundStyle(.red)
                     VStack(alignment: .leading, spacing: 6) {
-                        Text("Road Traffic Collision")
+                        Text(session.scenario.title)
                             .font(.largeTitle.bold())
-                        Text("Multi-casualty coordination • Foundation scenario")
+                        Text(session.scenario.subtitle)
                             .font(.title3)
                             .foregroundStyle(.secondary)
                     }
@@ -1103,10 +1173,7 @@ struct BriefingView: View {
 
                 GroupBox("Dispatch information") {
                     VStack(alignment: .leading, spacing: 12) {
-                        BriefingRow(icon: "car.side.fill", text: "Two-vehicle collision with three reported casualties")
-                        BriefingRow(icon: "location.fill", text: "Rural roadside; emergency services not yet on scene")
-                        BriefingRow(icon: "exclamationmark.triangle.fill", text: "Hazards are unknown - survey before approaching")
-                        BriefingRow(icon: "clock.fill", text: "One casualty may change condition during the exercise")
+                        BriefingRow(icon: "antenna.radiowaves.left.and.right", text: session.scenario.dispatch)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.vertical, 8)
@@ -1114,11 +1181,9 @@ struct BriefingView: View {
 
                 GroupBox("Your objectives") {
                     VStack(alignment: .leading, spacing: 10) {
-                        Text("1. Survey the scene and identify hazards")
-                        Text("2. Assess all three casualties")
-                        Text("3. Initiate and maintain simulated CPR coverage when indicated")
-                        Text("4. Assign and revise triage priorities")
-                        Text("5. Communicate risks and resource requirements")
+                        ForEach(Array(session.scenario.objectives.enumerated()), id: \.element.id) { index, objective in
+                            Label("\(index + 1). \(objective.title) — \(objective.detail)", systemImage: objective.icon)
+                        }
                     }
                     .font(.headline)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -1127,7 +1192,7 @@ struct BriefingView: View {
 
                 GroupBox("Training boundary") {
                     Label(
-                        "This educator-authored scenario practices observation, communication, reassessment, and role coordination. It does not implement or certify START, SALT, or a clinical procedure.",
+                        session.scenario.trainingBoundary,
                         systemImage: "checkmark.shield.fill"
                     )
                     .font(.subheadline)
@@ -1135,6 +1200,8 @@ struct BriefingView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.vertical, 8)
                 }
+
+                DemoReadinessView()
 
                 CollaborationLobbyView()
 
@@ -1154,6 +1221,88 @@ struct BriefingView: View {
             }
             .padding(32)
         }
+    }
+}
+
+struct DemoReadinessView: View {
+    @EnvironmentObject private var aiCoach: AICoachCoordinator
+    @EnvironmentObject private var collaboration: IncidentCollaborationCoordinator
+
+    var body: some View {
+        GroupBox("Demo readiness") {
+            HStack(spacing: 12) {
+                ReadinessItem(
+                    title: "Spatial runtime",
+                    detail: spatialDetail,
+                    icon: spatialReady ? "checkmark.circle.fill" : "visionpro",
+                    colour: spatialReady ? .green : .orange
+                )
+                ReadinessItem(
+                    title: "Scenario assets",
+                    detail: assetsReady ? "Models and earcons loaded" : "A bundled asset is missing",
+                    icon: assetsReady ? "checkmark.circle.fill" : "exclamationmark.triangle.fill",
+                    colour: assetsReady ? .green : .red
+                )
+                ReadinessItem(
+                    title: "Coach",
+                    detail: aiCoach.relayIsConfigured ? "Grounded AI relay configured" : "Evidence-grounded local coach",
+                    icon: aiCoach.relayIsConfigured ? "sparkles" : "lock.shield.fill",
+                    colour: aiCoach.relayIsConfigured ? .purple : .blue
+                )
+                ReadinessItem(
+                    title: "Incident mode",
+                    detail: collaboration.isShared ? "SharePlay · \(collaboration.participantCount) live" : "Solo · ready",
+                    icon: collaboration.isShared ? "shareplay" : "person.fill",
+                    colour: collaboration.isShared ? .green : .blue
+                )
+            }
+            .padding(.vertical, 8)
+        }
+    }
+
+    private var assetsReady: Bool {
+        let models = ["CollisionVehicle", "CasualtyAlex", "CasualtyJordan", "CasualtySam"]
+        let audio = ["SurveyConfirm", "SurveyComplete", "HazardAlert"]
+        return models.allSatisfy { Bundle.main.url(forResource: $0, withExtension: "usdz") != nil }
+            && audio.allSatisfy { Bundle.main.url(forResource: $0, withExtension: "wav") != nil }
+    }
+
+    private var spatialReady: Bool {
+#if targetEnvironment(simulator)
+        false
+#else
+        HandTrackingProvider.isSupported && WorldTrackingProvider.isSupported
+#endif
+    }
+
+    private var spatialDetail: String {
+#if targetEnvironment(simulator)
+        "Simulator workflow only"
+#else
+        spatialReady ? "Hands and headset pose supported" : "Check Vision Pro capability"
+#endif
+    }
+}
+
+struct ReadinessItem: View {
+    let title: String
+    let detail: String
+    let icon: String
+    let colour: Color
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Label(title, systemImage: icon)
+                .font(.caption.bold())
+                .foregroundStyle(colour)
+            Text(detail)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .lineLimit(2)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(10)
+        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12))
     }
 }
 
@@ -1293,6 +1442,7 @@ struct BriefingRow: View {
 struct SurveyProgressView: View {
     @EnvironmentObject private var spatialAssessment: SpatialAssessmentCoordinator
     let completed: Set<SurveyCheckpoint>
+    let coverageBins: Set<Int>
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -1300,9 +1450,19 @@ struct SurveyProgressView: View {
                 Label("Spatial scene survey", systemImage: "view.360")
                     .font(.headline)
                 Spacer()
-                Text("\(completed.count)/\(SurveyCheckpoint.required.count)")
+                Text("\(Int((SurveyCoverage.fractionCovered(coverageBins) * 100).rounded()))%")
                     .font(.caption.bold().monospacedDigit())
                     .foregroundStyle(.secondary)
+            }
+
+            HStack(spacing: 4) {
+                ForEach(0..<SurveyCoverage.binCount, id: \.self) { bin in
+                    Capsule()
+                        .fill(coverageBins.contains(bin) ? Color.green : Color.cyan.opacity(0.18))
+                        .frame(height: 8)
+                        .accessibilityLabel("Coverage segment \(bin + 1)")
+                        .accessibilityValue(coverageBins.contains(bin) ? "covered" : "uncovered")
+                }
             }
 
             HStack(spacing: 8) {
@@ -1328,7 +1488,7 @@ struct SurveyProgressView: View {
                 }
             }
 
-            if !SurveyCheckpoint.required.isSubset(of: completed) {
+            if !SurveyCoverage.allBins.isSubset(of: coverageBins) {
                 Label(spatialAssessment.surveyStatus.title, systemImage: surveyStatusIcon)
                     .font(.caption.bold())
                     .foregroundStyle(surveyStatusColour)
@@ -1371,6 +1531,7 @@ struct SurveyProgressView: View {
     private var surveyStatusIcon: String {
         switch spatialAssessment.surveyStatus {
         case .tracking: "viewfinder.circle.fill"
+        case .temporarilyLost: "eye.slash.fill"
         case .simulatorUnavailable: "visionpro"
         case .unavailable: "exclamationmark.triangle.fill"
         case .starting: "ellipsis.circle.fill"
@@ -1381,6 +1542,7 @@ struct SurveyProgressView: View {
     private var surveyStatusColour: Color {
         switch spatialAssessment.surveyStatus {
         case .tracking: .green
+        case .temporarilyLost: .orange
         case .simulatorUnavailable, .unavailable: .orange
         case .starting: .cyan
         case .idle: .secondary
@@ -1518,6 +1680,8 @@ struct AfterActionReviewView: View {
     @EnvironmentObject private var session: TrainingSession
     @EnvironmentObject private var aiCoach: AICoachCoordinator
     let restartAction: () -> Void
+    @State private var isExportingReport = false
+    @State private var exportStatus: String?
 
     var body: some View {
         ScrollView {
@@ -1547,6 +1711,8 @@ struct AfterActionReviewView: View {
                     ScoreCard(title: "Communication", score: session.score.communication, maximum: 15)
                 }
 
+                InstructorCompetencyView(results: session.instructorReport.competencies)
+
                 GroundedAICoachView()
 
                 GroupBox("Evidence replay") {
@@ -1555,10 +1721,24 @@ struct AfterActionReviewView: View {
                 }
 
                 HStack {
-                    Text("Focus for next attempt: scene safety, systematic assessment, reassessment, and concise communication.")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("Focus for next attempt: scene safety, systematic assessment, reassessment, and concise communication.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                        if let exportStatus {
+                            Text(exportStatus)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
                     Spacer()
+                    Button {
+                        isExportingReport = true
+                    } label: {
+                        Label("Export instructor report", systemImage: "square.and.arrow.up")
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.large)
                     Button(action: restartAction) {
                         Label("Run Again", systemImage: "arrow.counterclockwise")
                             .padding(.horizontal, 12)
@@ -1572,6 +1752,19 @@ struct AfterActionReviewView: View {
         .task(id: coachingTaskID) {
             await aiCoach.generate(for: session)
         }
+        .fileExporter(
+            isPresented: $isExportingReport,
+            document: InstructorReportDocument(report: session.instructorReport),
+            contentType: .json,
+            defaultFilename: "TriageXR-\(session.scenario.id)-report"
+        ) { result in
+            switch result {
+            case .success:
+                exportStatus = "Instructor report exported with replay evidence and training boundary."
+            case .failure:
+                exportStatus = "The report could not be exported. Choose another destination and try again."
+            }
+        }
     }
 
     private var scoreColour: Color {
@@ -1581,6 +1774,58 @@ struct AfterActionReviewView: View {
     private var coachingTaskID: String {
         let lastID = session.decisionEvidence.last?.id.uuidString ?? "none"
         return "\(session.decisionEvidence.count)-\(lastID)-\(session.score.total)"
+    }
+}
+
+struct InstructorCompetencyView: View {
+    let results: [InstructorCompetencyResult]
+
+    var body: some View {
+        GroupBox("Instructor competency summary") {
+            LazyVGrid(
+                columns: [GridItem(.flexible()), GridItem(.flexible())],
+                alignment: .leading,
+                spacing: 12
+            ) {
+                ForEach(results) { result in
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack {
+                            Text(result.title)
+                                .font(.headline)
+                            Spacer()
+                            Text(result.status)
+                                .font(.caption.bold())
+                                .foregroundStyle(result.status == "Demonstrated" ? .green : .orange)
+                        }
+                        Text(result.evidence)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(12)
+                    .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 14))
+                }
+            }
+            .padding(.vertical, 8)
+        }
+    }
+}
+
+struct InstructorReportDocument: FileDocument {
+    static var readableContentTypes: [UTType] { [.json] }
+    private let data: Data
+
+    init(report: InstructorSessionReport) {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        data = (try? encoder.encode(report)) ?? Data("{}".utf8)
+    }
+
+    init(configuration: ReadConfiguration) throws {
+        data = configuration.file.regularFileContents ?? Data()
+    }
+
+    func fileWrapper(configuration: WriteConfiguration) throws -> FileWrapper {
+        FileWrapper(regularFileWithContents: data)
     }
 }
 
@@ -2861,6 +3106,10 @@ struct SpatialControlPanel: View {
                 }
             }
 
+            if session.scenarioPace == .demo {
+                JudgeDemoProgressView()
+            }
+
             if let notice = collaboration.notice {
                 Label(notice, systemImage: "info.circle.fill")
                     .font(.caption.bold())
@@ -2870,7 +3119,10 @@ struct SpatialControlPanel: View {
             if session.selectedCasualty == nil {
                 NextActionCard(action: session.nextRecommendedAction, compact: true)
                 if !session.sceneSurveyed {
-                    SurveyProgressView(completed: session.surveyedCheckpoints)
+                    SurveyProgressView(
+                        completed: session.surveyedCheckpoints,
+                        coverageBins: session.surveyCoverageBins
+                    )
                 }
             }
 
@@ -3028,6 +3280,38 @@ struct SpatialControlPanel: View {
     private func formatCountdown(_ time: TimeInterval) -> String {
         let totalSeconds = max(0, Int(time.rounded(.up)))
         return String(format: "%02d:%02d", totalSeconds / 60, totalSeconds % 60)
+    }
+}
+
+struct JudgeDemoProgressView: View {
+    @EnvironmentObject private var session: TrainingSession
+
+    private var beats: [(String, String, Bool)] {
+        let jordan = session.casualties.first(where: { $0.id == "casualty-b" })
+        return [
+            ("1", "Survey", session.sceneSurveyed),
+            ("2", "Hazard", session.hazardIdentified),
+            ("3", "Stabilise", (jordan?.effectiveCPRSeconds ?? 0) >= ScenarioRules.minimumDemonstrationCPRDuration),
+            ("4", "Debrief", session.canComplete)
+        ]
+    }
+
+    var body: some View {
+        HStack(spacing: 6) {
+            ForEach(Array(beats.enumerated()), id: \.offset) { _, beat in
+                HStack(spacing: 5) {
+                    Image(systemName: beat.2 ? "checkmark.circle.fill" : "\(beat.0).circle")
+                    Text(beat.1)
+                }
+                .font(.caption2.bold())
+                .foregroundStyle(beat.2 ? .green : .secondary)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 6)
+                .background((beat.2 ? Color.green : Color.secondary).opacity(0.1), in: Capsule())
+            }
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Judge demo progress")
     }
 }
 

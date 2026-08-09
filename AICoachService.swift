@@ -122,6 +122,7 @@ final class AICoachCoordinator: ObservableObject {
 
         let request = AICoachRequest(
             sessionID: requestSessionID,
+            scenario: "\(session.scenario.title) · content v\(session.scenario.version)",
             scenarioPace: session.scenarioPace,
             score: session.score,
             evidence: session.decisionEvidence

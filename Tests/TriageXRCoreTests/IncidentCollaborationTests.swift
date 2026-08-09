@@ -7,6 +7,8 @@ struct IncidentCollaborationTests {
     func rolesPermitOnlyTheirOperationalActions() {
         #expect(IncidentCommand.inspectSurveyCheckpoint(.forward).isPermitted(for: .incidentCommander))
         #expect(!IncidentCommand.inspectSurveyCheckpoint(.forward).isPermitted(for: .triageOfficer))
+        #expect(IncidentCommand.recordSurveyCoverage([0, 1]).isPermitted(for: .incidentCommander))
+        #expect(!IncidentCommand.recordSurveyCoverage([0, 1]).isPermitted(for: .airwayResponder))
         #expect(IncidentCommand.setScenarioPace(.demo).isPermitted(for: .incidentCommander))
         #expect(!IncidentCommand.setScenarioPace(.demo).isPermitted(for: .triageOfficer))
 
@@ -30,6 +32,7 @@ struct IncidentCollaborationTests {
             .reset,
             .setScenarioPace(.demo),
             .inspectSurveyCheckpoint(.leftFlank),
+            .recordSurveyCoverage([11, 0, 1]),
             .identifyHazard,
             .communicateHazard,
             .requestResources,
@@ -103,6 +106,7 @@ struct IncidentCollaborationTests {
             .reset,
             .setScenarioPace(.realtime),
             .inspectSurveyCheckpoint(.rear),
+            .recordSurveyCoverage([5, 6, 7]),
             .identifyHazard,
             .communicateHazard,
             .requestResources,
@@ -186,6 +190,7 @@ struct IncidentCollaborationTests {
             hazardIdentified: true,
             hazardCommunicated: false,
             surveyedCheckpoints: SurveyCheckpoint.required,
+            surveyCoverageBins: SurveyCoverage.allBins,
             resourceRequestSent: false,
             deteriorationTriggered: false,
             events: [],
@@ -205,6 +210,7 @@ struct IncidentCollaborationTests {
         #expect(decodedSnapshot.scenarioPace == .demo)
         #expect(decodedSnapshot.sceneSurveyed)
         #expect(decodedSnapshot.surveyedCheckpoints == SurveyCheckpoint.required)
+        #expect(decodedSnapshot.surveyCoverageBins == SurveyCoverage.allBins)
         #expect(decodedSnapshot.decisionEvidence.first?.actorRole == .triageOfficer)
         #expect(decodedSnapshot.decisionEvidence.first?.cues == ["Unresponsive"])
         #expect(decodedSnapshot.decisionEvidence.last?.actorRole == nil)
@@ -221,5 +227,20 @@ struct IncidentCollaborationTests {
 
         completed.insert(.rear)
         #expect(SurveyCheckpoint.required.isSubset(of: completed))
+    }
+
+    @Test
+    func continuousCoverageRequiresAllTwelveSegments() {
+        let almostComplete = Set(0..<11)
+        #expect(SurveyCoverage.fractionCovered(almostComplete) < 1)
+        #expect(
+            SurveyCoverage.completedCheckpoints(for: almostComplete)
+                != SurveyCheckpoint.required
+        )
+        #expect(SurveyCoverage.fractionCovered(SurveyCoverage.allBins) == 1)
+        #expect(
+            SurveyCoverage.completedCheckpoints(for: SurveyCoverage.allBins)
+                == SurveyCheckpoint.required
+        )
     }
 }

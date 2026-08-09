@@ -13,3 +13,7 @@ The collision vehicle is derived from Car Concept by Eric Chadwick and Darmstadt
 The source model and textures are released under the [CC BY 4.0 license](https://creativecommons.org/licenses/by/4.0/).
 The app uses an optimized USDZ derivative.
 Source: [Khronos glTF Sample Assets - Car Concept](https://github.khronos.org/glTF-Assets/).
+
+## Original project assets
+
+The roadside panorama and the Survey Confirm, Survey Complete, and Hazard Alert earcons are original TriageXR project assets. The earcons are generated reproducibly from simple synthesized waveforms by `Scripts/generate_audio_cues.py`; they do not contain third-party recordings.
