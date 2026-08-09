@@ -1,0 +1,6 @@
+name = "triagexr-coach-relay"
+main = "src/worker.js"
+compatibility_date = "2026-08-01"
+
+[observability.logs]
+enabled = true

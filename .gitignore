@@ -2,3 +2,5 @@
 build/
 .DS_Store
 DerivedData/
+relay/node_modules/
+.wrangler/

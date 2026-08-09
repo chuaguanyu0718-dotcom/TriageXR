@@ -13,6 +13,7 @@ struct TriageXRApp: App {
     @StateObject private var session: TrainingSession
     @StateObject private var collaboration: IncidentCollaborationCoordinator
     @StateObject private var spatialAssessment: SpatialAssessmentCoordinator
+    @StateObject private var aiCoach: AICoachCoordinator
 
     init() {
         let session = TrainingSession()
@@ -24,6 +25,7 @@ struct TriageXRApp: App {
         _session = StateObject(wrappedValue: session)
         _collaboration = StateObject(wrappedValue: collaboration)
         _spatialAssessment = StateObject(wrappedValue: spatialAssessment)
+        _aiCoach = StateObject(wrappedValue: AICoachCoordinator())
     }
 
     var body: some SwiftUI.Scene {
@@ -32,6 +34,7 @@ struct TriageXRApp: App {
                 .environmentObject(session)
                 .environmentObject(collaboration)
                 .environmentObject(spatialAssessment)
+                .environmentObject(aiCoach)
         }
         .defaultSize(width: 920, height: 720)
 
@@ -82,7 +85,7 @@ final class TrainingSession: ObservableObject {
     @Published var selectedCasualtyID: String?
     @Published var hazardIdentified = false
     @Published var hazardCommunicated = false
-    @Published var sceneSurveyed = false
+    @Published var surveyedCheckpoints: Set<SurveyCheckpoint> = []
     @Published var resourceRequestSent = false
     @Published var deteriorationTriggered = false
     @Published var events: [SessionEvent] = []
@@ -112,11 +115,15 @@ final class TrainingSession: ObservableObject {
 
     var canComplete: Bool { taggedCount == casualties.count }
 
+    var sceneSurveyed: Bool {
+        SurveyCheckpoint.required.isSubset(of: surveyedCheckpoints)
+    }
+
     var nextRecommendedAction: RecommendedAction {
         if !sceneSurveyed {
             return RecommendedAction(
                 title: "Survey the scene",
-                detail: "Complete a deliberate 360° scan before approaching casualties.",
+                detail: "Look around and pinch each blue sector beacon (\(surveyedCheckpoints.count)/\(SurveyCheckpoint.required.count)).",
                 icon: "view.360",
                 colour: .orange
             )
@@ -142,10 +149,10 @@ final class TrainingSession: ObservableObject {
            !jordan.isDeceased,
            jordan.effectiveCPRSeconds < ScenarioRules.minimumDemonstrationCPRDuration {
             return RecommendedAction(
-                title: jordan.isReceivingCPR ? "Maintain effective CPR" : "Start CPR for Jordan",
+                title: jordan.isReceivingCPR ? "Maintain simulated CPR" : "Start simulated CPR for Jordan",
                 detail: jordan.isReceivingCPR
-                    ? "Keep holding the compression target and follow the \(ScenarioRules.targetCompressionRate)/min rhythm."
-                    : "Pinch and hold the red compression target; deterioration resumes when released.",
+                    ? "Keep holding the compression target; \(ScenarioRules.targetCompressionRate)/min is a reference rhythm, not a measured rate."
+                    : "Pinch and hold the red target to represent continuous compression coverage; deterioration resumes when released.",
                 icon: "heart.fill",
                 colour: .red
             )
@@ -210,8 +217,8 @@ final class TrainingSession: ObservableObject {
             reset()
         case .setScenarioPace(let pace):
             setScenarioPace(pace)
-        case .markSurveyComplete:
-            markSurveyComplete()
+        case .inspectSurveyCheckpoint(let checkpoint):
+            inspectSurveyCheckpoint(checkpoint)
         case .identifyHazard:
             identifyHazard()
         case .communicateHazard:
@@ -264,7 +271,7 @@ final class TrainingSession: ObservableObject {
             casualties: casualties,
             hazardIdentified: hazardIdentified,
             hazardCommunicated: hazardCommunicated,
-            sceneSurveyed: sceneSurveyed,
+            surveyedCheckpoints: surveyedCheckpoints,
             resourceRequestSent: resourceRequestSent,
             deteriorationTriggered: deteriorationTriggered,
             events: events,
@@ -287,7 +294,7 @@ final class TrainingSession: ObservableObject {
         }
         hazardIdentified = snapshot.hazardIdentified
         hazardCommunicated = snapshot.hazardCommunicated
-        sceneSurveyed = snapshot.sceneSurveyed
+        surveyedCheckpoints = snapshot.surveyedCheckpoints
         resourceRequestSent = snapshot.resourceRequestSent
         deteriorationTriggered = snapshot.deteriorationTriggered
         events = snapshot.events
@@ -302,7 +309,7 @@ final class TrainingSession: ObservableObject {
         selectedCasualtyID = nil
         hazardIdentified = false
         hazardCommunicated = false
-        sceneSurveyed = false
+        surveyedCheckpoints = []
         resourceRequestSent = false
         deteriorationTriggered = false
         events = []
@@ -375,18 +382,30 @@ final class TrainingSession: ObservableObject {
         didChange?(sharedSnapshot())
     }
 
-    func markSurveyComplete() {
-        guard phase == .active, !sceneSurveyed else { return }
-        sceneSurveyed = true
+    func inspectSurveyCheckpoint(_ checkpoint: SurveyCheckpoint) {
+        guard phase == .active else { return }
+        let wasNew = surveyedCheckpoints.insert(checkpoint).inserted
+        guard wasNew else { return }
+        let inspectedCount = surveyedCheckpoints.count
+        let isComplete = sceneSurveyed
         record(
             "Safety",
-            "Completed a 360° scene survey before casualty assessment.",
+            isComplete
+                ? "Inspected the \(checkpoint.title.lowercased()) and completed the 360° scene survey."
+                : "Inspected the \(checkpoint.title.lowercased()) during the 360° scene survey.",
             positive: true,
-            outcome: "Scene entry safe",
+            outcome: isComplete
+                ? "Scene entry safe"
+                : "Survey \(inspectedCount) of \(SurveyCheckpoint.required.count)",
             evidenceOutcome: .succeeded,
-            rationale: "A deliberate survey reduces the chance of entering an unmanaged fuel hazard or missing additional casualties.",
-            cues: ["Two damaged vehicles", "Yellow fuel spill", "Three casualty markers"],
-            consequence: "Approach routes and hazard controls could be planned before patient contact."
+            rationale: "A deliberate physical scan reduces the chance of entering an unmanaged hazard or missing casualties and access routes.",
+            cues: [checkpoint.spatialCue, "\(inspectedCount) of \(SurveyCheckpoint.required.count) sectors inspected"],
+            consequence: isComplete
+                ? "The full scene perimeter and approach routes were checked before patient contact."
+                : "The \(checkpoint.title.lowercased()) was added to the verified scene survey.",
+            recommendedAction: isComplete
+                ? nil
+                : "Continue turning through the scene and inspect every remaining blue sector beacon."
         )
     }
 
@@ -547,28 +566,28 @@ final class TrainingSession: ObservableObject {
         casualties[index].activeCPRBoutSeconds = 0
         casualties[index].cprSessionCount += 1
         let pausedAt = casualties[index].neurologicalRiskTimeRemaining ?? 0
-        conditionAlert = "Effective CPR started for \(casualties[index].name). Keep holding to pause deterioration."
+        conditionAlert = "Simulated CPR started for \(casualties[index].name). Keep holding to represent continuous compression coverage."
         record(
             "Treatment",
-            "CPR commenced for \(casualties[index].name) with \(Self.formatCountdown(pausedAt)) remaining to neurological risk.",
+            "Simulated CPR coverage commenced for \(casualties[index].name) with \(Self.formatCountdown(pausedAt)) remaining to neurological risk.",
             positive: true,
             outcome: "Deterioration paused",
             evidenceOutcome: .succeeded,
-            rationale: "Unresponsiveness, abnormal breathing, and absent circulation indicate immediate CPR.",
+            rationale: "Unresponsiveness, abnormal breathing, and absent circulation triggered the scenario's CPR response. The spatial hold represents continuous team coverage; it does not measure physical compression quality.",
             cues: primaryFindingCues(for: casualties[index]),
-            consequence: "Untreated deterioration paused while effective compressions continued.",
+            consequence: "Untreated deterioration paused while simulated compression coverage continued.",
             replayFocusCasualtyID: casualtyID
         )
 
         let announcement = AVSpeechUtterance(
-            string: "Effective CPR started. Maintain compressions at the indicated rhythm."
+            string: "CPR simulation started. Maintain the hold; the displayed rhythm is a reference."
         )
         announcement.rate = 0.48
         announcement.volume = 0.9
         voice.speak(announcement)
     }
 
-    func endCPR(for casualtyID: String, reason: String = "Compression hold released") {
+    func endCPR(for casualtyID: String, reason: String = "Compression simulation hold released") {
         guard phase == .active else { return }
         guard let index = casualties.firstIndex(where: { $0.id == casualtyID }),
               casualties[index].isReceivingCPR else { return }
@@ -581,17 +600,17 @@ final class TrainingSession: ObservableObject {
             ?? casualties[index].deathTimeRemaining
             ?? 0
         let metDemonstrationTarget = boutDuration >= ScenarioRules.minimumDemonstrationCPRDuration
-        conditionAlert = "CPR stopped for \(casualties[index].name). Untreated deterioration has resumed."
+        conditionAlert = "CPR simulation stopped for \(casualties[index].name). Untreated deterioration has resumed."
         record(
             "Treatment",
-            "\(reason) after \(Self.formatDuration(boutDuration)) of effective CPR; untreated countdown resumed at \(Self.formatCountdown(remaining)).",
+            "\(reason) after \(Self.formatDuration(boutDuration)) of simulated CPR coverage; untreated countdown resumed at \(Self.formatCountdown(remaining)).",
             positive: metDemonstrationTarget,
-            outcome: metDemonstrationTarget ? "Effective CPR recorded" : "CPR interrupted early",
+            outcome: metDemonstrationTarget ? "CPR coverage recorded" : "CPR simulation interrupted early",
             evidenceOutcome: metDemonstrationTarget ? .succeeded : .needsReview,
             rationale: metDemonstrationTarget
-                ? "The compression hold met the demonstration threshold and preserved continuous support during the recorded bout."
-                : "The compression hold ended before the demonstration threshold, interrupting external circulation.",
-            cues: ["Effective bout \(Self.formatDuration(boutDuration))", "Target rhythm \(ScenarioRules.targetCompressionRate)/min"],
+                ? "The spatial hold met the demonstration threshold and represented continuous team coverage during the recorded bout. It did not assess physical compression mechanics."
+                : "The spatial hold ended before the demonstration threshold, interrupting the simulated coverage period.",
+            cues: ["Simulated coverage \(Self.formatDuration(boutDuration))", "Reference rhythm \(ScenarioRules.targetCompressionRate)/min"],
             consequence: "Untreated deterioration resumed as soon as compressions stopped.",
             recommendedAction: metDemonstrationTarget
                 ? nil
@@ -634,12 +653,12 @@ final class TrainingSession: ObservableObject {
         }
 
         if let jordan, jordan.effectiveCPRSeconds == 0 {
-            review.append("Jordan received no effective CPR. After confirming unresponsiveness, abnormal breathing, and absent perfusion, pinch and continuously hold the compression target.")
+            review.append("Jordan received no simulated CPR coverage. After confirming unresponsiveness, abnormal breathing, and absent perfusion, pinch and continuously hold the compression target.")
         } else if let jordan,
                   jordan.effectiveCPRSeconds < ScenarioRules.minimumDemonstrationCPRDuration {
-            review.append("Jordan received only \(Self.formatDuration(jordan.effectiveCPRSeconds)) of effective CPR. Maintain the hold and follow the \(ScenarioRules.targetCompressionRate)/min rhythm; deterioration resumes as soon as compressions stop.")
+            review.append("Jordan received only \(Self.formatDuration(jordan.effectiveCPRSeconds)) of simulated CPR coverage. Maintain the hold continuously; deterioration resumes as soon as the simulation stops.")
         } else if let jordan {
-            review.append("You delivered \(Self.formatDuration(jordan.effectiveCPRSeconds)) of effective CPR across \(jordan.cprSessionCount) attempt\(jordan.cprSessionCount == 1 ? "" : "s"), pausing untreated deterioration only while compressions were maintained.")
+            review.append("You maintained \(Self.formatDuration(jordan.effectiveCPRSeconds)) of simulated CPR coverage across \(jordan.cprSessionCount) attempt\(jordan.cprSessionCount == 1 ? "" : "s"), pausing untreated deterioration only while the hold continued.")
         }
 
         let missedAssessments = casualties.reduce(0) { $0 + (Assessment.allCases.count - $1.completedAssessments.count) }
@@ -748,7 +767,7 @@ final class TrainingSession: ObservableObject {
             positive: false,
             outcome: "Condition worsened",
             evidenceOutcome: .scenarioUpdate,
-            rationale: "Untreated cardiac arrest continued while no effective CPR was being delivered.",
+            rationale: "Untreated cardiac arrest continued while no simulated CPR coverage was active.",
             cues: ["Untreated time \(Self.formatDuration(casualties[index].untreatedSeconds))", casualties[index].visibleSymptoms],
             consequence: stage >= 5
                 ? "The casualty reached the simulation death threshold."
@@ -1078,7 +1097,7 @@ struct BriefingView: View {
                 GroupBox("Dispatch information") {
                     VStack(alignment: .leading, spacing: 12) {
                         BriefingRow(icon: "car.side.fill", text: "Two-vehicle collision with three reported casualties")
-                        BriefingRow(icon: "location.fill", text: "Urban roadside; emergency services not yet on scene")
+                        BriefingRow(icon: "location.fill", text: "Rural roadside; emergency services not yet on scene")
                         BriefingRow(icon: "exclamationmark.triangle.fill", text: "Hazards are unknown - survey before approaching")
                         BriefingRow(icon: "clock.fill", text: "One casualty may change condition during the exercise")
                     }
@@ -1090,7 +1109,7 @@ struct BriefingView: View {
                     VStack(alignment: .leading, spacing: 10) {
                         Text("1. Survey the scene and identify hazards")
                         Text("2. Assess all three casualties")
-                        Text("3. Deliver effective CPR when indicated")
+                        Text("3. Initiate and maintain simulated CPR coverage when indicated")
                         Text("4. Assign and revise triage priorities")
                         Text("5. Communicate risks and resource requirements")
                     }
@@ -1253,6 +1272,50 @@ struct BriefingRow: View {
     }
 }
 
+struct SurveyProgressView: View {
+    let completed: Set<SurveyCheckpoint>
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Label("Spatial scene survey", systemImage: "view.360")
+                    .font(.headline)
+                Spacer()
+                Text("\(completed.count)/\(SurveyCheckpoint.required.count)")
+                    .font(.caption.bold().monospacedDigit())
+                    .foregroundStyle(.secondary)
+            }
+
+            HStack(spacing: 8) {
+                ForEach(SurveyCheckpoint.allCases) { checkpoint in
+                    let isComplete = completed.contains(checkpoint)
+                    Label(
+                        checkpoint.shortTitle,
+                        systemImage: isComplete ? "checkmark.circle.fill" : "circle.dashed"
+                    )
+                    .font(.caption.bold())
+                    .foregroundStyle(isComplete ? .green : .cyan)
+                    .frame(maxWidth: .infinity)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 7)
+                    .background(
+                        (isComplete ? Color.green : Color.cyan).opacity(0.1),
+                        in: Capsule()
+                    )
+                }
+            }
+
+            if !SurveyCheckpoint.required.isSubset(of: completed) {
+                Text("Turn through the full scene and pinch each blue beacon before approaching casualties.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(12)
+        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 16))
+    }
+}
+
 struct LiveDashboardView: View {
     @EnvironmentObject private var session: TrainingSession
     @EnvironmentObject private var collaboration: IncidentCollaborationCoordinator
@@ -1271,10 +1334,13 @@ struct LiveDashboardView: View {
             NextActionCard(action: session.nextRecommendedAction)
 
             HStack(spacing: 16) {
-                Button { collaboration.submit(.markSurveyComplete) } label: {
-                    Label(session.sceneSurveyed ? "Survey complete" : "Complete 360° survey", systemImage: "view.360")
-                }
-                .disabled(session.sceneSurveyed)
+                Label(
+                    session.sceneSurveyed
+                        ? "Survey complete"
+                        : "Survey \(session.surveyedCheckpoints.count)/\(SurveyCheckpoint.required.count)",
+                    systemImage: session.sceneSurveyed ? "view.360.circle.fill" : "view.360"
+                )
+                .foregroundStyle(session.sceneSurveyed ? .green : .orange)
 
                 Button { collaboration.submit(.communicateHazard) } label: {
                     Label(session.hazardCommunicated ? "Hazard reported" : "Report hazard", systemImage: "radio")
@@ -1378,6 +1444,7 @@ struct EventRow: View {
 
 struct AfterActionReviewView: View {
     @EnvironmentObject private var session: TrainingSession
+    @EnvironmentObject private var aiCoach: AICoachCoordinator
     let restartAction: () -> Void
 
     var body: some View {
@@ -1408,15 +1475,7 @@ struct AfterActionReviewView: View {
                     ScoreCard(title: "Communication", score: session.score.communication, maximum: 15)
                 }
 
-                GroupBox("Coach priorities") {
-                    VStack(alignment: .leading, spacing: 14) {
-                        ForEach(Array(session.coachReview.enumerated()), id: \.offset) { _, item in
-                            Label(item, systemImage: "sparkles")
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                        }
-                    }
-                    .padding(.vertical, 8)
-                }
+                GroundedAICoachView()
 
                 GroupBox("Evidence replay") {
                     DecisionReplayView(evidence: session.decisionEvidence)
@@ -1438,10 +1497,142 @@ struct AfterActionReviewView: View {
             }
             .padding(30)
         }
+        .task(id: coachingTaskID) {
+            await aiCoach.generate(for: session)
+        }
     }
 
     private var scoreColour: Color {
         session.score.total >= 80 ? .green : session.score.total >= 60 ? .orange : .red
+    }
+
+    private var coachingTaskID: String {
+        let lastID = session.decisionEvidence.last?.id.uuidString ?? "none"
+        return "\(session.decisionEvidence.count)-\(lastID)-\(session.score.total)"
+    }
+}
+
+struct GroundedAICoachView: View {
+    @EnvironmentObject private var session: TrainingSession
+    @EnvironmentObject private var aiCoach: AICoachCoordinator
+
+    var body: some View {
+        GroupBox {
+            VStack(alignment: .leading, spacing: 16) {
+                HStack(spacing: 10) {
+                    Label(aiCoach.source.title, systemImage: aiCoach.source.systemImage)
+                        .font(.subheadline.bold())
+                        .foregroundStyle(aiCoach.source == .groundedAI ? .purple : .blue)
+                    if aiCoach.isLoading {
+                        ProgressView()
+                            .controlSize(.small)
+                    }
+                    Spacer()
+                    if aiCoach.relayIsConfigured && !aiCoach.isLoading {
+                        Button("Regenerate") {
+                            Task { await aiCoach.generate(for: session, force: true) }
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                    }
+                }
+
+                if let report = aiCoach.report {
+                    Text(report.summary)
+                        .font(.headline)
+
+                    LazyVGrid(
+                        columns: [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())],
+                        alignment: .leading,
+                        spacing: 14
+                    ) {
+                        CoachObservationCard(
+                            eyebrow: "Strongest decision",
+                            icon: "checkmark.circle.fill",
+                            colour: .green,
+                            observation: report.strongestDecision,
+                            evidence: session.decisionEvidence
+                        )
+                        CoachObservationCard(
+                            eyebrow: "Missed cue",
+                            icon: "eye.trianglebadge.exclamationmark.fill",
+                            colour: .orange,
+                            observation: report.missedCue,
+                            evidence: session.decisionEvidence
+                        )
+                        CoachObservationCard(
+                            eyebrow: "Next drill",
+                            icon: "scope",
+                            colour: .blue,
+                            observation: report.nextDrill,
+                            evidence: session.decisionEvidence
+                        )
+                    }
+
+                    Divider()
+                    Text(report.disclaimer)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                Text(aiCoach.statusMessage)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.vertical, 8)
+        } label: {
+            Label("Grounded coach", systemImage: "sparkles.rectangle.stack.fill")
+        }
+    }
+}
+
+struct CoachObservationCard: View {
+    let eyebrow: String
+    let icon: String
+    let colour: Color
+    let observation: AICoachObservation
+    let evidence: [DecisionEvidence]
+
+    private var citedEvents: [DecisionEvidence] {
+        let citedIDs = Set(observation.evidenceEventIDs)
+        return evidence.filter { citedIDs.contains($0.id.uuidString.lowercased()) }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Label(eyebrow.uppercased(), systemImage: icon)
+                .font(.caption2.bold())
+                .foregroundStyle(colour)
+            Text(observation.headline)
+                .font(.headline)
+            Text(observation.explanation)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+
+            Spacer(minLength: 2)
+            ForEach(citedEvents) { event in
+                HStack(spacing: 6) {
+                    Image(systemName: "link")
+                    Text(event.timestamp)
+                        .monospacedDigit()
+                    Text(event.category)
+                        .lineLimit(1)
+                }
+                .font(.caption.bold())
+                .foregroundStyle(colour)
+                .padding(.horizontal, 9)
+                .padding(.vertical, 6)
+                .background(colour.opacity(0.12), in: Capsule())
+                .accessibilityLabel("Evidence at \(event.timestamp), \(event.category)")
+            }
+        }
+        .frame(maxWidth: .infinity, minHeight: 190, alignment: .topLeading)
+        .padding(16)
+        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 16))
+        .overlay {
+            RoundedRectangle(cornerRadius: 16)
+                .stroke(colour.opacity(0.18), lineWidth: 1)
+        }
     }
 }
 
@@ -1916,7 +2107,9 @@ struct ImmersiveTriageView: View {
                 .targetedToAnyEntity()
                 .onEnded { value in
                     let name = value.entity.name
-                    if name.hasPrefix("casualty-") {
+                    if let checkpoint = SurveyCheckpoint.from(entityName: name) {
+                        collaboration.submit(.inspectSurveyCheckpoint(checkpoint))
+                    } else if name.hasPrefix("casualty-") {
                         collaboration.submit(.selectCasualty(name))
                     } else if name == "fuel-hazard" {
                         collaboration.submit(.identifyHazard)
@@ -1947,7 +2140,7 @@ struct ImmersiveTriageView: View {
                     guard value.entity.name == "cpr-target-casualty-b",
                           spatialCPRIsHeld else { return }
                     spatialCPRIsHeld = false
-                    collaboration.submit(.endCPR("casualty-b", "Spatial compression hold released"))
+                    collaboration.submit(.endCPR("casualty-b", "Spatial compression simulation hold released"))
                 }
         )
         .task {
@@ -2000,6 +2193,22 @@ struct ImmersiveTriageView: View {
 
     private func updateScene(content: RealityViewContent) {
         guard let root = content.entities.first(where: { $0.name == "scene-root" }) else { return }
+        for checkpoint in SurveyCheckpoint.allCases {
+            guard let beacon = root.findEntity(named: checkpoint.entityName) as? ModelEntity else {
+                continue
+            }
+            let isInspected = session.surveyedCheckpoints.contains(checkpoint)
+            beacon.isEnabled = !session.sceneSurveyed
+            beacon.model?.materials = [
+                SimpleMaterial(
+                    color: isInspected ? .systemGreen : .systemCyan,
+                    roughness: 0.2,
+                    isMetallic: false
+                )
+            ]
+            let scale: Float = isInspected ? 0.72 : 1
+            beacon.scale = [scale, scale, scale]
+        }
         if let hazard = root.findEntity(named: "fuel-hazard") as? ModelEntity {
             hazard.model?.materials = [SimpleMaterial(color: session.hazardIdentified ? .systemRed : .systemYellow, isMetallic: false)]
             hazard.scale = session.hazardIdentified ? [1.2, 1.2, 1.2] : [1, 1, 1]
@@ -2074,6 +2283,7 @@ struct ImmersiveTriageView: View {
         }
 
         addRoadEnvironment(to: root)
+        addSurveyCheckpoints(to: root)
 
         root.addChild(await makeVehicle(position: [-2.4, -1.28, -4.2], rotation: -0.22))
         root.addChild(await makeVehicle(position: [2.0, -1.28, -4.4], rotation: 0.3))
@@ -2083,6 +2293,37 @@ struct ImmersiveTriageView: View {
         root.addChild(await makeCasualty(id: "casualty-c", assetName: "CasualtySam", locatorColour: .systemTeal, position: [1.55, -1.08, -2.2]))
         root.addChild(makeHazard())
         return root
+    }
+
+    private func addSurveyCheckpoints(to root: Entity) {
+        let positions: [SurveyCheckpoint: SIMD3<Float>] = [
+            .forward: [0, 0.55, -5.3],
+            .leftFlank: [-3.7, 0.5, -1.2],
+            .rear: [0, 0.5, 2.8],
+            .rightFlank: [3.7, 0.5, -1.2]
+        ]
+
+        for checkpoint in SurveyCheckpoint.allCases {
+            guard let position = positions[checkpoint] else { continue }
+            let beacon = ModelEntity(
+                mesh: .generateSphere(radius: 0.18),
+                materials: [
+                    SimpleMaterial(
+                        color: .systemCyan,
+                        roughness: 0.2,
+                        isMetallic: false
+                    )
+                ]
+            )
+            beacon.name = checkpoint.entityName
+            beacon.position = position
+            beacon.components.set(InputTargetComponent())
+            beacon.components.set(
+                CollisionComponent(shapes: [.generateSphere(radius: 0.3)])
+            )
+            beacon.components.set(HoverEffectComponent())
+            root.addChild(beacon)
+        }
     }
 
     private func sceneAsset(named name: String) async -> Entity? {
@@ -2366,6 +2607,9 @@ struct SpatialControlPanel: View {
 
             if session.selectedCasualty == nil {
                 NextActionCard(action: session.nextRecommendedAction, compact: true)
+                if !session.sceneSurveyed {
+                    SurveyProgressView(completed: session.surveyedCheckpoints)
+                }
             }
 
             if let casualty = session.selectedCasualty {
@@ -2401,7 +2645,7 @@ struct SpatialControlPanel: View {
                     if casualty.deteriorationProfile.requiresCPR {
                         if casualty.isReceivingCPR {
                             Label(
-                                "Effective CPR is active. Untreated deterioration is paused only while you hold.",
+                                "Simulated CPR coverage is active. Untreated deterioration is paused only while you hold.",
                                 systemImage: "pause.circle.fill"
                             )
                             .foregroundStyle(.green)
@@ -2438,7 +2682,7 @@ struct SpatialControlPanel: View {
                             CPRHoldControl(casualtyID: casualty.id)
                         } else if !casualty.isDeceased {
                             Label(
-                                "Complete the primary assessment to activate the CPR compression target.",
+                                "Complete the primary assessment to activate the simulated CPR target.",
                                 systemImage: "lock.fill"
                             )
                             .font(.caption.bold())
@@ -2494,10 +2738,6 @@ struct SpatialControlPanel: View {
                 Text("Survey the scene, then look at a casualty or the yellow fuel spill and pinch.")
                     .foregroundStyle(.secondary)
                 HStack {
-                    Button { collaboration.submit(.markSurveyComplete) } label: {
-                        Label(session.sceneSurveyed ? "Surveyed" : "360° survey", systemImage: "view.360")
-                    }
-                    .disabled(session.sceneSurveyed)
                     Button { collaboration.submit(.communicateHazard) } label: {
                         Label(session.hazardCommunicated ? "Reported" : "Report hazard", systemImage: "radio")
                     }
@@ -2687,13 +2927,13 @@ struct CPRHoldControl: View {
                 }
 
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(isHolding ? "Maintain compressions" : "Pinch and hold for CPR")
+                    Text(isHolding ? "Maintain simulated coverage" : "Hold to simulate CPR coverage")
                         .font(.headline)
                     if let casualty {
                         Text(
                             isHolding
-                                ? "Target \(ScenarioRules.targetCompressionRate)/min • \(format(casualty.activeCPRBoutSeconds)) effective"
-                                : "Total effective CPR: \(format(casualty.effectiveCPRSeconds))"
+                                ? "Reference \(ScenarioRules.targetCompressionRate)/min • \(format(casualty.activeCPRBoutSeconds)) held"
+                                : "Total simulated coverage: \(format(casualty.effectiveCPRSeconds))"
                         )
                         .font(.caption)
                     }
@@ -2716,13 +2956,13 @@ struct CPRHoldControl: View {
                         stopCPR()
                     }
             )
-            .accessibilityLabel("CPR compression target")
-            .accessibilityHint("Pinch and hold to maintain effective CPR")
+            .accessibilityLabel("Simulated CPR coverage target")
+            .accessibilityHint("Pinch and hold to represent continuous CPR coverage; physical compression quality is not measured")
             .accessibilityAddTraits(.isButton)
-            .accessibilityAction(named: "Start CPR") {
+            .accessibilityAction(named: "Start CPR simulation") {
                 startCPR()
             }
-            .accessibilityAction(named: "Stop CPR") {
+            .accessibilityAction(named: "Stop CPR simulation") {
                 stopCPR()
             }
         }
@@ -2746,7 +2986,7 @@ struct CPRHoldControl: View {
     private func stopCPR() {
         guard isHolding else { return }
         isHolding = false
-        collaboration.submit(.endCPR(casualtyID, "Compression hold released"))
+        collaboration.submit(.endCPR(casualtyID, "Compression simulation hold released"))
     }
 
     private func format(_ time: TimeInterval) -> String {
@@ -2835,7 +3075,7 @@ private enum TriagePreviewFixtures {
                 completedAssessments: ScenarioRules.primaryAssessments,
                 isReceivingCPR: true,
                 isDeceased: false,
-                conditionLabel: "CPR in progress"
+                conditionLabel: "Simulated CPR active"
             ),
             CasualtyReplayState(
                 id: "casualty-c",
