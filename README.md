@@ -1,7 +1,9 @@
 # TriageXR
 
-TriageXR is a visionOS mass-casualty incident training prototype for Apple Vision Pro.
+TriageXR is a visionOS multi-casualty coordination training prototype for Apple Vision Pro.
 It develops scene awareness, prioritisation, reassessment, and communication; it does not teach physical medical procedures or replace live exercises.
+The fictional educator-authored scenario is not a START or SALT implementation and does not provide clinical certification.
+See [TRAINING_SCOPE.md](TRAINING_SCOPE.md) for measured outcomes, exclusions, and the instructor validation checklist.
 
 ## Run
 
@@ -18,14 +20,14 @@ The experience follows the product storyboard:
 2. **Entry:** Choose Enter Incident.
    The briefing Window closes and the mixed Immersive Space opens.
 3. **Scene survey:** Three casualties, two vehicles, and one fuel hazard appear around the trainee.
-   Physically turn through the scene and pinch the four blue sector beacons positioned in front, left, rear, and right.
-   The survey completes only after every sector is inspected.
+   Physically turn through the scene and briefly hold a level view toward the front, left, rear, and right sectors.
+   Vision Pro headset orientation verifies the survey automatically; the directional scan gates are visual guidance, not buttons.
 4. **Casualty selection:** Look at a casualty and pinch.
 5. **Assessment:** A compact information card moves beside the selected casualty.
    Reach to the highlighted 3D assessment target and hold the required hand pose so ARKit can verify the response, breathing, perfusion, and injury checks.
 6. **Tagging:** Choose P1, P2, P3, or Expectant.
    A matching coloured tag attaches to the casualty.
-7. **Condition change:** Jordan's untreated cardiac arrest progresses on a clinically meaningful clock, while sustained CPR pauses deterioration.
+7. **Condition change:** Jordan's fictional untreated cardiac-arrest state progresses on an exercise clock, while sustained simulated CPR coverage pauses deterioration.
    Reassess and retag Jordan as the evidence changes.
 8. **Debrief:** Choose Finish & Debrief.
    The Immersive Space closes and the Window reopens with metrics, personalised coaching, and an evidence replay explaining why each decision succeeded or failed.
@@ -44,13 +46,14 @@ After identifying it, use the incident panel to report it and request resources.
 - **Verified spatial assessment:** On Vision Pro, ARKit hand tracking verifies that the trainee reaches and sustains the correct pose at a casualty's highlighted 3D target.
   The breathing check verifies an open hand from four tracked fingertips, and the perfusion check verifies fingertip pinch distance.
   The Simulator exposes the same assessment sequence through target pinches for repeatable demos.
-- **Verified spatial scene survey:** Four interactive sector beacons require the Incident Commander to turn through the full environment instead of confirming a survey from a button.
+- **Automatic spatial scene survey:** ARKit world tracking samples Vision Pro's forward direction and requires a stable 0.8-second dwell in four relative sectors.
+  Fast turns, steep vertical glances, and duplicate sectors do not count, and the directional scan gates are intentionally non-interactive.
   Survey progress is host-authoritative, synchronized through SharePlay, and preserved in the evidence timeline.
 - **Collaborative incident command:** SharePlay synchronises one host-authoritative incident across participants.
   Incident commander, triage officer, airway responder, and instructor roles have explicit permissions, visible responsibilities, and shared immersive-space placement.
   Each responder navigates casualties independently, while every assessment, tag, and treatment command carries an explicit casualty target to the host.
   Out-of-role attempts are rejected without changing state and become attributed evidence in the debrief.
-- **Stage-ready timing:** Demo 8x is the default exercise pace, bringing the six-minute neurological-risk threshold into 45 real seconds and the ten-minute scenario threshold into 75 real seconds.
+- **Stage-ready timing:** Demo 8x is the default exercise pace, bringing the fictional six-minute escalation threshold into 45 real seconds and the ten-minute scenario threshold into 75 real seconds.
   Simulated CPR coverage credit uses real hold duration, while Realtime remains available from the briefing.
   The hold represents continuous team coverage and does not measure physical compression rate, depth, or recoil.
 
@@ -64,7 +67,7 @@ Run `swift test` from the repository root to execute those tests.
    Keep the default Demo 8x pace for a short presentation, or select Realtime for an unaccelerated exercise.
 2. Have participants join the activity and select Triage Officer, Airway Responder, or Instructor.
    The host owns the incident clock and authoritative state while every role receives the same scene updates.
-3. Let the Incident Commander turn through the full environment and pinch the front, left, rear, and right survey beacons.
+3. Let the Incident Commander turn through the full environment and briefly hold a level view in the front, left, rear, and right sectors while each scan gate turns green automatically.
    Then identify the fuel spill, report the hazard, and request resources.
 4. Let the Triage Officer select a casualty, then reach to each highlighted marker.
    Response and injury checks use fingertip placement, breathing requires a sustained open hand over the chest, and perfusion requires a sustained fingertip pinch at the wrist.
@@ -74,7 +77,8 @@ Run `swift test` from the repository root to execute those tests.
    Each stop shows the responsible role, evidence available at that moment, causal explanation, consequence, next best action when relevant, and reconstructed incident state.
 
 On the visionOS Simulator, pinch each highlighted assessment marker to produce deterministic simulated spatial evidence.
-Real hand-pose verification runs only on Vision Pro hardware.
+ARKit hand-pose and headset-orientation verification run only on supported Vision Pro hardware; Simulator identifies this limitation instead of fabricating survey evidence.
+The pure survey detector remains covered by deterministic Mac tests.
 
 ## Roadside environment
 
@@ -104,4 +108,5 @@ Run `npm run check && npm test` inside `relay/` to verify the relay without an A
 ## 3D assets
 
 The immersive scene includes optimized USDZ derivatives of openly licensed casualty and vehicle models.
+Their packages are RealityKit-compliance checked, and `Scripts/repair_usdz_assets.py` can reproducibly remove the invalid embedded environment-light texture emitted by the source conversion.
 See [ASSET_ATTRIBUTION.md](ASSET_ATTRIBUTION.md) for source and license details.

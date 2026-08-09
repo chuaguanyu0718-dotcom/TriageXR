@@ -14,7 +14,7 @@ function requestFixture() {
   return {
     schemaVersion: 1,
     sessionID: "00000000-0000-0000-0000-000000000099",
-    scenario: "Roadside mass-casualty incident simulation",
+    scenario: "Roadside multi-casualty coordination simulation",
     scenarioPace: "Demo 8x",
     score: { safety: 20, assessment: 20, triage: 18, treatment: 10, communication: 12 },
     events: [

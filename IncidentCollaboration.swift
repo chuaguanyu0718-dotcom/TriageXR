@@ -7,7 +7,7 @@ struct TriageIncidentActivity: GroupActivity {
         get async {
             var metadata = GroupActivityMetadata()
             metadata.title = "TriageXR Incident Command"
-            metadata.subtitle = "Train as a coordinated mass-casualty response team"
+            metadata.subtitle = "Train as a coordinated multi-casualty response team"
             metadata.type = .generic
             return metadata
         }

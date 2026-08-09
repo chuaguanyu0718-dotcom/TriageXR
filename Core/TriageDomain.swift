@@ -92,6 +92,184 @@ enum SurveyCheckpoint: String, CaseIterable, Identifiable, Codable, Hashable, Se
     }
 }
 
+struct SceneSurveySample: Equatable, Sendable {
+    let timestamp: TimeInterval
+    let forward: SpatialVector3
+}
+
+struct SceneSurveyObservation: Equatable, Sendable {
+    let checkpoint: SurveyCheckpoint?
+    let progress: Double
+    let isStable: Bool
+    let newlyCompletedCheckpoint: SurveyCheckpoint?
+}
+
+/// Converts headset orientation samples into deliberate scene-survey evidence.
+///
+/// The first valid horizontal sample establishes the user's forward sector. A sector
+/// only completes after the user holds a reasonably level, stable view there. This
+/// prevents a fast head turn or an accidental upward/downward glance from satisfying
+/// the safety task.
+struct SceneSurveyEngine: Sendable {
+    static let requiredDwellDuration: TimeInterval = 0.8
+
+    private let maximumVerticalForwardComponent: Float = 0.72
+    private let maximumAngularVelocity: Float = 1.6
+    private var referenceYaw: Float?
+    private var previousYaw: Float?
+    private var previousTimestamp: TimeInterval?
+    private var candidateCheckpoint: SurveyCheckpoint?
+    private var candidateStartedAt: TimeInterval?
+    private var completedCheckpoints: Set<SurveyCheckpoint> = []
+
+    mutating func reset() {
+        referenceYaw = nil
+        previousYaw = nil
+        previousTimestamp = nil
+        candidateCheckpoint = nil
+        candidateStartedAt = nil
+        completedCheckpoints = []
+    }
+
+    mutating func synchronizeCompleted(_ checkpoints: Set<SurveyCheckpoint>) {
+        // Keep locally completed evidence until the host-authoritative snapshot arrives.
+        // Shared commands use reliable delivery, but the next pose sample can arrive first.
+        completedCheckpoints.formUnion(checkpoints)
+        if let candidateCheckpoint, checkpoints.contains(candidateCheckpoint) {
+            self.candidateCheckpoint = nil
+            candidateStartedAt = nil
+        }
+    }
+
+    mutating func interruptDwell() {
+        previousYaw = nil
+        previousTimestamp = nil
+        candidateCheckpoint = nil
+        candidateStartedAt = nil
+    }
+
+    mutating func observe(sample: SceneSurveySample) -> SceneSurveyObservation {
+        let forward = sample.forward
+        let length = sqrt(
+            (forward.x * forward.x)
+                + (forward.y * forward.y)
+                + (forward.z * forward.z)
+        )
+        guard length > 0.001 else {
+            return invalidObservation()
+        }
+
+        let verticalComponent = abs(forward.y / length)
+        guard verticalComponent <= maximumVerticalForwardComponent else {
+            candidateCheckpoint = nil
+            candidateStartedAt = nil
+            return invalidObservation()
+        }
+
+        let yaw = atan2(forward.x, -forward.z)
+        if referenceYaw == nil {
+            referenceYaw = yaw
+        }
+        let relativeYaw = Self.normalizedAngle(yaw - (referenceYaw ?? yaw))
+        let checkpoint = Self.checkpoint(forRelativeYaw: relativeYaw)
+
+        let isStable: Bool
+        if let previousYaw, let previousTimestamp {
+            let elapsed = sample.timestamp - previousTimestamp
+            if elapsed > 0 {
+                let angularDistance = abs(Self.normalizedAngle(yaw - previousYaw))
+                isStable = angularDistance / Float(elapsed) <= maximumAngularVelocity
+            } else {
+                isStable = false
+            }
+        } else {
+            isStable = true
+        }
+        self.previousYaw = yaw
+        previousTimestamp = sample.timestamp
+
+        guard !completedCheckpoints.contains(checkpoint) else {
+            candidateCheckpoint = nil
+            candidateStartedAt = nil
+            return SceneSurveyObservation(
+                checkpoint: checkpoint,
+                progress: 1,
+                isStable: isStable,
+                newlyCompletedCheckpoint: nil
+            )
+        }
+
+        guard isStable else {
+            candidateCheckpoint = nil
+            candidateStartedAt = nil
+            return SceneSurveyObservation(
+                checkpoint: checkpoint,
+                progress: 0,
+                isStable: false,
+                newlyCompletedCheckpoint: nil
+            )
+        }
+
+        if candidateCheckpoint != checkpoint {
+            candidateCheckpoint = checkpoint
+            candidateStartedAt = sample.timestamp
+        }
+
+        let dwellDuration = max(0, sample.timestamp - (candidateStartedAt ?? sample.timestamp))
+        let progress = min(1, dwellDuration / Self.requiredDwellDuration)
+        guard progress >= 1 else {
+            return SceneSurveyObservation(
+                checkpoint: checkpoint,
+                progress: progress,
+                isStable: true,
+                newlyCompletedCheckpoint: nil
+            )
+        }
+
+        completedCheckpoints.insert(checkpoint)
+        candidateCheckpoint = nil
+        candidateStartedAt = nil
+        return SceneSurveyObservation(
+            checkpoint: checkpoint,
+            progress: 1,
+            isStable: true,
+            newlyCompletedCheckpoint: checkpoint
+        )
+    }
+
+    private mutating func invalidObservation() -> SceneSurveyObservation {
+        interruptDwell()
+        return SceneSurveyObservation(
+            checkpoint: nil,
+            progress: 0,
+            isStable: false,
+            newlyCompletedCheckpoint: nil
+        )
+    }
+
+    private static func checkpoint(forRelativeYaw yaw: Float) -> SurveyCheckpoint {
+        let quarterTurn = Float.pi / 4
+        let threeQuarterTurn = 3 * quarterTurn
+        switch yaw {
+        case -quarterTurn..<quarterTurn:
+            return .forward
+        case quarterTurn..<threeQuarterTurn:
+            return .rightFlank
+        case -threeQuarterTurn ..< -quarterTurn:
+            return .leftFlank
+        default:
+            return .rear
+        }
+    }
+
+    private static func normalizedAngle(_ angle: Float) -> Float {
+        var value = angle
+        while value > .pi { value -= 2 * .pi }
+        while value <= -.pi { value += 2 * .pi }
+        return value
+    }
+}
+
 enum TriagePriority: String, CaseIterable, Identifiable, Codable, Sendable {
     case p1 = "P1"
     case p2 = "P2"
@@ -538,7 +716,7 @@ struct AICoachEventPayload: Identifiable, Codable, Equatable, Sendable {
 struct AICoachRequest: Codable, Equatable, Sendable {
     static let currentSchemaVersion = 1
     static let maximumEventCount = 80
-    static let scenarioName = "Roadside mass-casualty incident simulation"
+    static let scenarioName = "Roadside multi-casualty coordination simulation"
 
     let schemaVersion: Int
     let sessionID: String

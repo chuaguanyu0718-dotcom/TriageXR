@@ -5,6 +5,7 @@ import AVFoundation
 import Combine
 import ARKit
 import GroupActivities
+import os
 
 // MARK: - App
 
@@ -21,6 +22,12 @@ struct TriageXRApp: App {
         let spatialAssessment = SpatialAssessmentCoordinator(trainingSession: session)
         spatialAssessment.installCommandSubmitter { [weak collaboration] command in
             collaboration?.submit(command)
+        }
+        spatialAssessment.installSurveyPermissionProvider { [weak collaboration] in
+            guard let collaboration else { return false }
+            return !collaboration.isShared
+                || IncidentCommand.inspectSurveyCheckpoint(.forward)
+                    .isPermitted(for: collaboration.localRole)
         }
         _session = StateObject(wrappedValue: session)
         _collaboration = StateObject(wrappedValue: collaboration)
@@ -65,8 +72,8 @@ extension Casualty {
     var conditionColour: Color {
         if isDeceased { return .gray }
         if isReceivingCPR { return .green }
-        if deteriorationProfile.requiresCPR { return health <= 25 ? .red : .orange }
-        return health <= 50 ? .orange : .blue
+        if deteriorationProfile.requiresCPR { return deteriorationStage >= 3 ? .red : .orange }
+        return conditionLabel.localizedCaseInsensitiveContains("stable") ? .blue : .orange
     }
 }
 
@@ -123,7 +130,7 @@ final class TrainingSession: ObservableObject {
         if !sceneSurveyed {
             return RecommendedAction(
                 title: "Survey the scene",
-                detail: "Look around and pinch each blue sector beacon (\(surveyedCheckpoints.count)/\(SurveyCheckpoint.required.count)).",
+                detail: "Turn naturally and hold your view in each sector; the headset verifies coverage automatically (\(surveyedCheckpoints.count)/\(SurveyCheckpoint.required.count)).",
                 icon: "view.360",
                 colour: .orange
             )
@@ -391,21 +398,21 @@ final class TrainingSession: ObservableObject {
         record(
             "Safety",
             isComplete
-                ? "Inspected the \(checkpoint.title.lowercased()) and completed the 360° scene survey."
-                : "Inspected the \(checkpoint.title.lowercased()) during the 360° scene survey.",
+                ? "Head orientation verified the \(checkpoint.title.lowercased()) and completed the 360° scene survey."
+                : "Head orientation verified a deliberate view of the \(checkpoint.title.lowercased()).",
             positive: true,
             outcome: isComplete
-                ? "Scene entry safe"
+                ? "360° scan verified"
                 : "Survey \(inspectedCount) of \(SurveyCheckpoint.required.count)",
             evidenceOutcome: .succeeded,
-            rationale: "A deliberate physical scan reduces the chance of entering an unmanaged hazard or missing casualties and access routes.",
-            cues: [checkpoint.spatialCue, "\(inspectedCount) of \(SurveyCheckpoint.required.count) sectors inspected"],
+            rationale: "A stable headset pose sustained in each direction provides observable evidence of a deliberate physical scan before scene entry.",
+            cues: [checkpoint.spatialCue, "Stable view held for at least \(String(format: "%.1f", SceneSurveyEngine.requiredDwellDuration)) seconds", "\(inspectedCount) of \(SurveyCheckpoint.required.count) sectors verified"],
             consequence: isComplete
-                ? "The full scene perimeter and approach routes were checked before patient contact."
-                : "The \(checkpoint.title.lowercased()) was added to the verified scene survey.",
+                ? "Every scene direction received deliberate, observable visual coverage before patient contact."
+                : "The \(checkpoint.title.lowercased()) was added to the verified scene survey without a button press.",
             recommendedAction: isComplete
                 ? nil
-                : "Continue turning through the scene and inspect every remaining blue sector beacon."
+                : "Continue turning through the scene and briefly hold your view in every remaining sector."
         )
     }
 
@@ -569,7 +576,7 @@ final class TrainingSession: ObservableObject {
         conditionAlert = "Simulated CPR started for \(casualties[index].name). Keep holding to represent continuous compression coverage."
         record(
             "Treatment",
-            "Simulated CPR coverage commenced for \(casualties[index].name) with \(Self.formatCountdown(pausedAt)) remaining to neurological risk.",
+            "Simulated CPR coverage commenced for \(casualties[index].name) with \(Self.formatCountdown(pausedAt)) remaining to the fictional escalation threshold.",
             positive: true,
             outcome: "Deterioration paused",
             evidenceOutcome: .succeeded,
@@ -742,14 +749,14 @@ final class TrainingSession: ObservableObject {
 
         switch stage {
         case 1:
-            message = "\(name): visible oxygen-deprivation signs are developing. Four minutes remain to the neurological-risk threshold."
-            spokenMessage = "Condition change. Four minutes remain on the untreated cardiac arrest timer."
+            message = "\(name): visible oxygen-deprivation signs are developing. Four exercise minutes remain to the fictional escalation threshold."
+            spokenMessage = "Condition change. Four exercise minutes remain on the fictional escalation timer."
         case 2:
-            message = "\(name): condition worsening. One minute remains to the neurological-risk threshold."
-            spokenMessage = "Urgent. One minute remains on the untreated cardiac arrest timer."
+            message = "\(name): condition worsening. One exercise minute remains to the fictional escalation threshold."
+            spokenMessage = "Urgent. One exercise minute remains on the fictional escalation timer."
         case 3:
-            message = "\(name): the six-minute untreated neurological-risk threshold has been reached."
-            spokenMessage = "Critical warning. The six minute untreated threshold has been reached."
+            message = "\(name): the fictional six-minute untreated escalation threshold has been reached."
+            spokenMessage = "Critical warning. The fictional six minute escalation threshold has been reached."
         case 4:
             message = "\(name): profound deterioration. Two minutes remain to the scenario death threshold."
             spokenMessage = "Critical warning. Two minutes remain to the scenario death threshold."
@@ -1088,7 +1095,7 @@ struct BriefingView: View {
                     VStack(alignment: .leading, spacing: 6) {
                         Text("Road Traffic Collision")
                             .font(.largeTitle.bold())
-                        Text("Mass-casualty triage • Foundation scenario")
+                        Text("Multi-casualty coordination • Foundation scenario")
                             .font(.title3)
                             .foregroundStyle(.secondary)
                     }
@@ -1118,10 +1125,21 @@ struct BriefingView: View {
                     .padding(.vertical, 8)
                 }
 
+                GroupBox("Training boundary") {
+                    Label(
+                        "This educator-authored scenario practices observation, communication, reassessment, and role coordination. It does not implement or certify START, SALT, or a clinical procedure.",
+                        systemImage: "checkmark.shield.fill"
+                    )
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.vertical, 8)
+                }
+
                 CollaborationLobbyView()
 
                 HStack {
-                    Label("Training aid only - follow your organisation’s approved protocols.", systemImage: "info.circle")
+                    Label("Simulation only — follow your instructor and organisation’s approved protocol.", systemImage: "info.circle")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                     Spacer()
@@ -1273,6 +1291,7 @@ struct BriefingRow: View {
 }
 
 struct SurveyProgressView: View {
+    @EnvironmentObject private var spatialAssessment: SpatialAssessmentCoordinator
     let completed: Set<SurveyCheckpoint>
 
     var body: some View {
@@ -1289,30 +1308,83 @@ struct SurveyProgressView: View {
             HStack(spacing: 8) {
                 ForEach(SurveyCheckpoint.allCases) { checkpoint in
                     let isComplete = completed.contains(checkpoint)
+                    let isCurrent = spatialAssessment.surveyCurrentCheckpoint == checkpoint
                     Label(
                         checkpoint.shortTitle,
-                        systemImage: isComplete ? "checkmark.circle.fill" : "circle.dashed"
+                        systemImage: isComplete
+                            ? "checkmark.circle.fill"
+                            : isCurrent ? "scope" : "circle.dashed"
                     )
                     .font(.caption.bold())
-                    .foregroundStyle(isComplete ? .green : .cyan)
+                    .foregroundStyle(isComplete ? .green : isCurrent ? .white : .cyan)
                     .frame(maxWidth: .infinity)
                     .padding(.horizontal, 8)
                     .padding(.vertical, 7)
                     .background(
-                        (isComplete ? Color.green : Color.cyan).opacity(0.1),
+                        (isComplete ? Color.green : Color.cyan)
+                            .opacity(isCurrent && !isComplete ? 0.45 : 0.1),
                         in: Capsule()
                     )
                 }
             }
 
             if !SurveyCheckpoint.required.isSubset(of: completed) {
-                Text("Turn through the full scene and pinch each blue beacon before approaching casualties.")
+                Label(spatialAssessment.surveyStatus.title, systemImage: surveyStatusIcon)
+                    .font(.caption.bold())
+                    .foregroundStyle(surveyStatusColour)
+                Text(spatialAssessment.surveyStatus.detail)
                     .font(.caption)
                     .foregroundStyle(.secondary)
+
+                if case .unavailable = spatialAssessment.surveyStatus {
+                    Button {
+                        spatialAssessment.restart()
+                    } label: {
+                        Label("Retry headset tracking", systemImage: "arrow.clockwise")
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                }
+
+                if let checkpoint = spatialAssessment.surveyCurrentCheckpoint,
+                   !completed.contains(checkpoint) {
+                    HStack {
+                        Text(
+                            spatialAssessment.surveyIsStable
+                                ? "Hold on \(checkpoint.shortTitle)…"
+                                : "Slow your turn to verify \(checkpoint.shortTitle)"
+                        )
+                        .font(.caption.bold())
+                        Spacer()
+                        Text("\(Int((spatialAssessment.surveyProgress * 100).rounded()))%")
+                            .font(.caption2.monospacedDigit())
+                    }
+                    ProgressView(value: spatialAssessment.surveyProgress)
+                        .tint(.cyan)
+                }
             }
         }
         .padding(12)
         .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 16))
+    }
+
+    private var surveyStatusIcon: String {
+        switch spatialAssessment.surveyStatus {
+        case .tracking: "viewfinder.circle.fill"
+        case .simulatorUnavailable: "visionpro"
+        case .unavailable: "exclamationmark.triangle.fill"
+        case .starting: "ellipsis.circle.fill"
+        case .idle: "view.360"
+        }
+    }
+
+    private var surveyStatusColour: Color {
+        switch spatialAssessment.surveyStatus {
+        case .tracking: .green
+        case .simulatorUnavailable, .unavailable: .orange
+        case .starting: .cyan
+        case .idle: .secondary
+        }
     }
 }
 
@@ -1983,9 +2055,9 @@ struct IncidentReplayMap: View {
     private func conditionColour(_ casualty: CasualtyReplayState) -> Color {
         if casualty.isDeceased { return .gray }
         if casualty.isReceivingCPR { return .green }
-        if casualty.health <= 25 { return .red }
-        if casualty.health <= 60 { return .orange }
-        return .blue
+        if casualty.conditionLabel.localizedCaseInsensitiveContains("cardiac arrest") { return .orange }
+        if casualty.conditionLabel.localizedCaseInsensitiveContains("stable") { return .blue }
+        return .orange
     }
 
     private func position(for casualtyID: String, in size: CGSize) -> CGPoint {
@@ -2002,7 +2074,7 @@ struct IncidentReplayMap: View {
         let hazard = snapshot.hazardIdentified ? "fuel hazard identified" : "fuel hazard not identified"
         let casualtyStates = snapshot.casualties.map { casualty in
             let priority = casualty.assignedPriority?.rawValue ?? "untagged"
-            return "\(casualty.name), health \(Int(casualty.health.rounded())) percent, \(priority)"
+            return "\(casualty.name), \(casualty.conditionLabel), \(priority)"
         }
         return ([pace, scene, hazard] + casualtyStates).joined(separator: "; ")
     }
@@ -2074,6 +2146,10 @@ struct ScoreCard: View {
 // MARK: - Immersive scene
 
 struct ImmersiveTriageView: View {
+    private static let assetLogger = Logger(
+        subsystem: "com.triagexr.training",
+        category: "scene-assets"
+    )
     @EnvironmentObject private var session: TrainingSession
     @EnvironmentObject private var collaboration: IncidentCollaborationCoordinator
     @EnvironmentObject private var spatialAssessment: SpatialAssessmentCoordinator
@@ -2107,9 +2183,7 @@ struct ImmersiveTriageView: View {
                 .targetedToAnyEntity()
                 .onEnded { value in
                     let name = value.entity.name
-                    if let checkpoint = SurveyCheckpoint.from(entityName: name) {
-                        collaboration.submit(.inspectSurveyCheckpoint(checkpoint))
-                    } else if name.hasPrefix("casualty-") {
+                    if name.hasPrefix("casualty-") {
                         collaboration.submit(.selectCasualty(name))
                     } else if name == "fuel-hazard" {
                         collaboration.submit(.identifyHazard)
@@ -2194,23 +2268,29 @@ struct ImmersiveTriageView: View {
     private func updateScene(content: RealityViewContent) {
         guard let root = content.entities.first(where: { $0.name == "scene-root" }) else { return }
         for checkpoint in SurveyCheckpoint.allCases {
-            guard let beacon = root.findEntity(named: checkpoint.entityName) as? ModelEntity else {
+            guard let guide = root.findEntity(named: checkpoint.entityName) else {
                 continue
             }
             let isInspected = session.surveyedCheckpoints.contains(checkpoint)
-            beacon.isEnabled = !session.sceneSurveyed
-            beacon.model?.materials = [
-                SimpleMaterial(
-                    color: isInspected ? .systemGreen : .systemCyan,
-                    roughness: 0.2,
-                    isMetallic: false
-                )
-            ]
-            let scale: Float = isInspected ? 0.72 : 1
-            beacon.scale = [scale, scale, scale]
+            let isCurrent = spatialAssessment.surveyCurrentCheckpoint == checkpoint
+            guide.isEnabled = !session.sceneSurveyed
+            setMaterialColour(
+                on: guide,
+                colour: isInspected ? .systemGreen : isCurrent ? .white : .systemCyan,
+                roughness: 0.18
+            )
+            let dwellPulse = isCurrent && !isInspected
+                ? Float(1 + (spatialAssessment.surveyProgress * 0.18))
+                : 1
+            let scale: Float = isInspected ? 0.82 : dwellPulse
+            guide.scale = [scale, scale, scale]
         }
-        if let hazard = root.findEntity(named: "fuel-hazard") as? ModelEntity {
-            hazard.model?.materials = [SimpleMaterial(color: session.hazardIdentified ? .systemRed : .systemYellow, isMetallic: false)]
+        if let hazard = root.findEntity(named: "fuel-hazard") {
+            setMaterialColour(
+                on: hazard,
+                colour: session.hazardIdentified ? .systemRed : .systemYellow,
+                roughness: 0.7
+            )
             hazard.scale = session.hazardIdentified ? [1.2, 1.2, 1.2] : [1, 1, 1]
         }
         for casualty in session.casualties {
@@ -2219,11 +2299,9 @@ struct ImmersiveTriageView: View {
             if let priority = casualty.assignedPriority {
                 tag.model?.materials = [SimpleMaterial(color: uiColour(priority), isMetallic: false)]
             }
-            if let marker = root.findEntity(named: "condition-\(casualty.id)") as? ModelEntity {
+            if let marker = root.findEntity(named: "condition-\(casualty.id)") {
                 marker.isEnabled = casualty.deteriorationProfile.requiresCPR
-                marker.model?.materials = [
-                    SimpleMaterial(color: uiConditionColour(casualty), isMetallic: false)
-                ]
+                setMaterialColour(on: marker, colour: uiConditionColour(casualty))
                 let pulseScale: Float = casualty.isReceivingCPR ? 1.25 : casualty.isDeceased ? 0.85 : 1
                 marker.scale = [pulseScale, pulseScale, pulseScale]
             }
@@ -2278,12 +2356,12 @@ struct ImmersiveTriageView: View {
             panoramaMaterial.faceCulling = .front
             let panorama = ModelEntity(mesh: .generateSphere(radius: 32), materials: [panoramaMaterial])
             panorama.name = "roadside-panorama"
-            panorama.position = [0, 2.2, -3]
+            panorama.position = .zero
             root.addChild(panorama)
         }
 
         addRoadEnvironment(to: root)
-        addSurveyCheckpoints(to: root)
+        addSurveyGuides(to: root)
 
         root.addChild(await makeVehicle(position: [-2.4, -1.28, -4.2], rotation: -0.22))
         root.addChild(await makeVehicle(position: [2.0, -1.28, -4.4], rotation: 0.3))
@@ -2295,7 +2373,7 @@ struct ImmersiveTriageView: View {
         return root
     }
 
-    private func addSurveyCheckpoints(to root: Entity) {
+    private func addSurveyGuides(to root: Entity) {
         let positions: [SurveyCheckpoint: SIMD3<Float>] = [
             .forward: [0, 0.55, -5.3],
             .leftFlank: [-3.7, 0.5, -1.2],
@@ -2305,29 +2383,67 @@ struct ImmersiveTriageView: View {
 
         for checkpoint in SurveyCheckpoint.allCases {
             guard let position = positions[checkpoint] else { continue }
-            let beacon = ModelEntity(
-                mesh: .generateSphere(radius: 0.18),
-                materials: [
-                    SimpleMaterial(
-                        color: .systemCyan,
-                        roughness: 0.2,
-                        isMetallic: false
-                    )
-                ]
+            let guide = makeSurveyGuide(named: checkpoint.entityName)
+            guide.position = position
+            let directionToUser = SIMD3<Float>(-position.x, 0, -position.z)
+            guide.orientation = simd_quatf(
+                angle: atan2(directionToUser.x, directionToUser.z),
+                axis: [0, 1, 0]
             )
-            beacon.name = checkpoint.entityName
-            beacon.position = position
-            beacon.components.set(InputTargetComponent())
-            beacon.components.set(
-                CollisionComponent(shapes: [.generateSphere(radius: 0.3)])
-            )
-            beacon.components.set(HoverEffectComponent())
-            root.addChild(beacon)
+            root.addChild(guide)
         }
     }
 
+    private func makeSurveyGuide(named name: String) -> Entity {
+        let guide = Entity()
+        guide.name = name
+        let material = SimpleMaterial(
+            color: UIColor.systemCyan.withAlphaComponent(0.78),
+            roughness: 0.18,
+            isMetallic: false
+        )
+
+        for x: Float in [-0.3, 0.3] {
+            let rail = ModelEntity(
+                mesh: .generateBox(width: 0.028, height: 0.52, depth: 0.028, cornerRadius: 0.01),
+                materials: [material]
+            )
+            rail.position = [x, 0, 0]
+            guide.addChild(rail)
+        }
+        for y: Float in [-0.25, 0.25] {
+            let cap = ModelEntity(
+                mesh: .generateBox(width: 0.62, height: 0.028, depth: 0.028, cornerRadius: 0.01),
+                materials: [material]
+            )
+            cap.position = [0, y, 0]
+            guide.addChild(cap)
+        }
+        for angle: Float in [-.pi / 4, .pi / 4] {
+            let chevron = ModelEntity(
+                mesh: .generateBox(width: 0.19, height: 0.035, depth: 0.04, cornerRadius: 0.01),
+                materials: [material]
+            )
+            chevron.position = [angle < 0 ? -0.065 : 0.065, 0, 0]
+            chevron.orientation = simd_quatf(angle: angle, axis: [0, 0, 1])
+            guide.addChild(chevron)
+        }
+        return guide
+    }
+
     private func sceneAsset(named name: String) async -> Entity? {
-        try? await Entity(named: name, in: .main)
+        do {
+            let asset = try await Entity(named: name, in: .main)
+            if let embeddedEnvironmentLight = asset.findEntity(named: "env_light") {
+                embeddedEnvironmentLight.removeFromParent()
+            }
+            return asset
+        } catch {
+            Self.assetLogger.error(
+                "Failed to load scene asset \(name, privacy: .public): \(error.localizedDescription, privacy: .public)"
+            )
+            return nil
+        }
     }
 
     private func addRoadEnvironment(to root: Entity) {
@@ -2406,6 +2522,7 @@ struct ImmersiveTriageView: View {
             asset.scale = [0.42, 0.42, 0.42]
             asset.position = [0, 0.08, 0]
             vehicle.addChild(asset)
+            addCollisionDamage(to: vehicle)
             return vehicle
         }
 
@@ -2434,16 +2551,76 @@ struct ImmersiveTriageView: View {
                 vehicle.addChild(wheel)
             }
         }
+        addCollisionDamage(to: vehicle)
         return vehicle
     }
 
+    private func addCollisionDamage(to vehicle: Entity) {
+        let crushedMetal = SimpleMaterial(
+            color: UIColor(red: 0.12, green: 0.13, blue: 0.14, alpha: 1),
+            roughness: 0.82,
+            isMetallic: true
+        )
+        let impactPanel = ModelEntity(
+            mesh: .generateBox(width: 0.34, height: 0.3, depth: 0.82, cornerRadius: 0.04),
+            materials: [crushedMetal]
+        )
+        impactPanel.position = [0.82, 0.03, 0]
+        impactPanel.orientation = simd_quatf(angle: 0.22, axis: [0, 0, 1])
+        vehicle.addChild(impactPanel)
+
+        let reflector = SimpleMaterial(
+            color: UIColor.systemOrange.withAlphaComponent(0.86),
+            roughness: 0.2,
+            isMetallic: false
+        )
+        for z: Float in [-0.3, 0.3] {
+            let brokenLamp = ModelEntity(
+                mesh: .generateBox(width: 0.04, height: 0.11, depth: 0.18, cornerRadius: 0.018),
+                materials: [reflector]
+            )
+            brokenLamp.position = [1.0, 0.05, z]
+            brokenLamp.orientation = simd_quatf(angle: z < 0 ? -0.25 : 0.25, axis: [1, 0, 0])
+            vehicle.addChild(brokenLamp)
+        }
+
+        for index in 0..<4 {
+            let shard = ModelEntity(
+                mesh: .generateBox(width: 0.12, height: 0.018, depth: 0.055, cornerRadius: 0.006),
+                materials: [crushedMetal]
+            )
+            shard.position = [
+                0.72 + (Float(index) * 0.13),
+                -0.46,
+                -0.42 + (Float(index % 2) * 0.78)
+            ]
+            shard.orientation = simd_quatf(angle: Float(index) * 0.55, axis: [0, 1, 0])
+            vehicle.addChild(shard)
+        }
+    }
+
     private func makeHazard() -> Entity {
-        let hazard = ModelEntity(mesh: .generateCylinder(height: 0.025, radius: 0.55), materials: [SimpleMaterial(color: .systemYellow, isMetallic: false)])
+        let hazard = Entity()
         hazard.name = "fuel-hazard"
         hazard.position = [-1.65, -1.31, -3.75]
         hazard.components.set(InputTargetComponent())
         hazard.components.set(CollisionComponent(shapes: [.generateBox(size: [1.2, 0.08, 1.2])]))
         hazard.components.set(HoverEffectComponent())
+
+        let material = SimpleMaterial(color: UIColor.systemYellow.withAlphaComponent(0.82), roughness: 0.7, isMetallic: false)
+        for (offset, scale) in [
+            (SIMD3<Float>(0, 0, 0), SIMD3<Float>(1.0, 1.0, 0.7)),
+            (SIMD3<Float>(0.34, 0.004, 0.12), SIMD3<Float>(0.62, 1.0, 0.42)),
+            (SIMD3<Float>(-0.28, 0.008, -0.17), SIMD3<Float>(0.48, 1.0, 0.58))
+        ] {
+            let lobe = ModelEntity(
+                mesh: .generateCylinder(height: 0.025, radius: 0.55),
+                materials: [material]
+            )
+            lobe.position = offset
+            lobe.scale = scale
+            hazard.addChild(lobe)
+        }
         return hazard
     }
 
@@ -2470,8 +2647,12 @@ struct ImmersiveTriageView: View {
         let locatorMaterial = SimpleMaterial(color: locatorColour, isMetallic: false)
         let pole = ModelEntity(mesh: .generateBox(width: 0.025, height: 0.55, depth: 0.025), materials: [locatorMaterial])
         pole.position = [0, 0.64, 0]
-        let locator = ModelEntity(mesh: .generateSphere(radius: 0.12), materials: [locatorMaterial])
+        let locator = ModelEntity(
+            mesh: .generateBox(width: 0.17, height: 0.17, depth: 0.045, cornerRadius: 0.025),
+            materials: [locatorMaterial]
+        )
         locator.position = [0, 0.94, 0]
+        locator.orientation = simd_quatf(angle: .pi / 4, axis: [0, 0, 1])
         casualty.addChild(pole); casualty.addChild(locator)
 
         let tag = ModelEntity(mesh: .generateBox(width: 0.3, height: 0.2, depth: 0.025, cornerRadius: 0.025), materials: [SimpleMaterial(color: .white, isMetallic: false)])
@@ -2480,9 +2661,19 @@ struct ImmersiveTriageView: View {
         tag.isEnabled = false
         casualty.addChild(tag)
 
-        let alert = ModelEntity(mesh: .generateSphere(radius: 0.09), materials: [SimpleMaterial(color: .systemRed, isMetallic: false)])
+        let alert = ModelEntity(
+            mesh: .generateBox(width: 0.065, height: 0.18, depth: 0.045, cornerRadius: 0.018),
+            materials: [SimpleMaterial(color: .systemRed, isMetallic: false)]
+        )
         alert.name = "condition-\(id)"
-        alert.position = [0, 0.5, 0]
+        alert.position = [0, 0.54, 0]
+        let alertDot = ModelEntity(
+            mesh: .generateCylinder(height: 0.045, radius: 0.04),
+            materials: [SimpleMaterial(color: .systemRed, isMetallic: false)]
+        )
+        alertDot.orientation = simd_quatf(angle: .pi / 2, axis: [1, 0, 0])
+        alertDot.position = [0, -0.13, 0]
+        alert.addChild(alertDot)
         alert.isEnabled = false
         casualty.addChild(alert)
 
@@ -2501,28 +2692,77 @@ struct ImmersiveTriageView: View {
         casualty.addChild(cprTarget)
 
         for assessment in Assessment.allCases {
-            let marker = ModelEntity(
-                mesh: .generateSphere(radius: 0.105),
-                materials: [
-                    SimpleMaterial(
-                        color: uiAssessmentColour(assessment),
-                        roughness: 0.25,
-                        isMetallic: false
-                    )
-                ]
-            )
+            let marker = makeAssessmentMarker(assessment: assessment, casualtyID: id)
             marker.name = "assessment-target-\(assessment.code)-\(id)"
             let offset = SpatialAssessmentCatalog.localOffset(for: assessment)
-            marker.position = [offset.x, offset.y, offset.z]
-            marker.components.set(InputTargetComponent())
-            marker.components.set(
-                CollisionComponent(shapes: [.generateSphere(radius: 0.16)])
-            )
-            marker.components.set(HoverEffectComponent())
+            let horizontalCorrection: Float = assessment == .breathing ? -0.065 : 0
+            marker.position = [offset.x + horizontalCorrection, offset.y, offset.z]
             marker.isEnabled = false
             casualty.addChild(marker)
         }
         return casualty
+    }
+
+    private func makeAssessmentMarker(
+        assessment: Assessment,
+        casualtyID: String
+    ) -> ModelEntity {
+        let colour = uiAssessmentColour(assessment)
+        let material = SimpleMaterial(
+            color: colour,
+            roughness: 0.25,
+            isMetallic: false
+        )
+        let marker: ModelEntity
+
+        switch assessment {
+        case .response:
+            marker = ModelEntity(
+                mesh: .generateBox(width: 0.18, height: 0.035, depth: 0.18, cornerRadius: 0.025),
+                materials: [material]
+            )
+            marker.orientation = simd_quatf(angle: .pi / 4, axis: [0, 1, 0])
+        case .breathing:
+            marker = ModelEntity(
+                mesh: .generateBox(width: 0.11, height: 0.035, depth: 0.19, cornerRadius: 0.05),
+                materials: [material]
+            )
+            let secondLung = ModelEntity(
+                mesh: .generateBox(width: 0.11, height: 0.035, depth: 0.19, cornerRadius: 0.05),
+                materials: [material]
+            )
+            secondLung.position.x = 0.13
+            marker.addChild(secondLung)
+        case .perfusion:
+            marker = ModelEntity(
+                mesh: .generateCylinder(height: 0.035, radius: 0.105),
+                materials: [material]
+            )
+            let pulseBar = ModelEntity(
+                mesh: .generateBox(width: 0.14, height: 0.045, depth: 0.03, cornerRadius: 0.012),
+                materials: [material]
+            )
+            pulseBar.position.y = 0.04
+            marker.addChild(pulseBar)
+        case .injuries:
+            marker = ModelEntity(
+                mesh: .generateBox(width: 0.22, height: 0.04, depth: 0.065, cornerRadius: 0.015),
+                materials: [material]
+            )
+            let crossBar = ModelEntity(
+                mesh: .generateBox(width: 0.065, height: 0.04, depth: 0.22, cornerRadius: 0.015),
+                materials: [material]
+            )
+            marker.addChild(crossBar)
+        }
+
+        marker.name = "assessment-target-\(assessment.code)-\(casualtyID)"
+        marker.components.set(InputTargetComponent())
+        marker.components.set(
+            CollisionComponent(shapes: [.generateBox(size: [0.32, 0.12, 0.32])])
+        )
+        marker.components.set(HoverEffectComponent())
+        return marker
     }
 
     private func addFallbackCasualtyGeometry(to casualty: Entity) {
@@ -2530,7 +2770,10 @@ struct ImmersiveTriageView: View {
         let skin = SimpleMaterial(color: UIColor(red: 0.72, green: 0.50, blue: 0.38, alpha: 1), isMetallic: false)
         let torso = ModelEntity(mesh: .generateCylinder(height: 0.9, radius: 0.22), materials: [uniform])
         torso.orientation = simd_quatf(angle: .pi / 2, axis: [0, 0, 1])
-        let head = ModelEntity(mesh: .generateSphere(radius: 0.23), materials: [skin])
+        let head = ModelEntity(
+            mesh: .generateBox(width: 0.38, height: 0.46, depth: 0.35, cornerRadius: 0.16),
+            materials: [skin]
+        )
         head.position = [-0.68, 0, 0]
         casualty.addChild(torso); casualty.addChild(head)
         for z: Float in [-0.11, 0.11] {
@@ -2538,6 +2781,25 @@ struct ImmersiveTriageView: View {
             leg.orientation = torso.orientation
             leg.position = [0.68, 0, z]
             casualty.addChild(leg)
+        }
+    }
+
+    private func setMaterialColour(
+        on entity: Entity,
+        colour: UIColor,
+        roughness: MaterialScalarParameter = 0.25
+    ) {
+        if let model = entity as? ModelEntity {
+            model.model?.materials = [
+                SimpleMaterial(
+                    color: colour,
+                    roughness: roughness,
+                    isMetallic: false
+                )
+            ]
+        }
+        for child in entity.children {
+            setMaterialColour(on: child, colour: colour, roughness: roughness)
         }
     }
 
@@ -2553,7 +2815,7 @@ struct ImmersiveTriageView: View {
     private func uiConditionColour(_ casualty: Casualty) -> UIColor {
         if casualty.isDeceased { return .black }
         if casualty.isReceivingCPR { return .systemGreen }
-        if casualty.health <= 25 { return .systemRed }
+        if casualty.deteriorationStage >= 3 { return .systemRed }
         return .systemOrange
     }
 
@@ -2629,14 +2891,7 @@ struct SpatialControlPanel: View {
                         Label(casualty.conditionLabel, systemImage: casualty.isReceivingCPR ? "waveform.path.ecg" : "heart.fill")
                             .foregroundStyle(casualty.conditionColour)
                             .font(.headline)
-                        Spacer()
-                        Text("Health \(Int(casualty.health.rounded()))%")
-                            .monospacedDigit()
-                            .font(.headline)
                     }
-
-                    ProgressView(value: casualty.health, total: 100)
-                        .tint(casualty.conditionColour)
 
                     Label(casualty.visibleSymptoms, systemImage: "eye.fill")
                         .font(.caption)
@@ -2660,7 +2915,7 @@ struct SpatialControlPanel: View {
                         } else if let remaining = casualty.neurologicalRiskTimeRemaining,
                                   remaining > 0 {
                             HStack {
-                                Label("Untreated neurological-risk timer", systemImage: "timer")
+                                Label("Fictional escalation timer", systemImage: "timer")
                                 Spacer()
                                 Text(formatCountdown(remaining))
                                     .font(.title2.bold())
@@ -2735,7 +2990,7 @@ struct SpatialControlPanel: View {
                     Text(String(format: "%02d:%02d", Int(session.elapsed) / 60, Int(session.elapsed) % 60))
                         .monospacedDigit()
                 }
-                Text("Survey the scene, then look at a casualty or the yellow fuel spill and pinch.")
+                Text("Turn to survey the full scene automatically. Then look at a casualty or the fuel spill and pinch to select it.")
                     .foregroundStyle(.secondary)
                 HStack {
                     Button { collaboration.submit(.communicateHazard) } label: {
@@ -2802,7 +3057,7 @@ struct SpatialAssessmentGuideView: View {
 
             if case .unavailable = spatialAssessment.status {
                 Button {
-                    spatialAssessment.start()
+                    spatialAssessment.restart()
                 } label: {
                     Label("Retry hand tracking", systemImage: "arrow.clockwise")
                 }
