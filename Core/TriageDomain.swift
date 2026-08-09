@@ -48,6 +48,50 @@ enum ScenarioPace: String, CaseIterable, Identifiable, Codable, Sendable {
     }
 }
 
+enum SurveyCheckpoint: String, CaseIterable, Identifiable, Codable, Hashable, Sendable {
+    case forward
+    case leftFlank
+    case rear
+    case rightFlank
+
+    static let required = Set(allCases)
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .forward: "Forward sector"
+        case .leftFlank: "Left flank"
+        case .rear: "Rear sector"
+        case .rightFlank: "Right flank"
+        }
+    }
+
+    var shortTitle: String {
+        switch self {
+        case .forward: "Front"
+        case .leftFlank: "Left"
+        case .rear: "Rear"
+        case .rightFlank: "Right"
+        }
+    }
+
+    var spatialCue: String {
+        switch self {
+        case .forward: "Collision, casualties, and approach route"
+        case .leftFlank: "Left shoulder and traffic approach"
+        case .rear: "Rear access and secondary hazards"
+        case .rightFlank: "Guardrail, verge, and escape route"
+        }
+    }
+
+    var entityName: String { "survey-checkpoint-\(rawValue)" }
+
+    static func from(entityName: String) -> SurveyCheckpoint? {
+        allCases.first { $0.entityName == entityName }
+    }
+}
+
 enum TriagePriority: String, CaseIterable, Identifiable, Codable, Sendable {
     case p1 = "P1"
     case p2 = "P2"
@@ -188,7 +232,7 @@ struct Casualty: Identifiable, Codable, Equatable, Sendable {
 
     var conditionLabel: String {
         if isDeceased { return "Deceased - simulation outcome" }
-        if isReceivingCPR { return "CPR in progress" }
+        if isReceivingCPR { return "Simulated CPR active" }
         if deteriorationProfile.requiresCPR { return "Cardiac arrest - untreated" }
         if health <= 50 { return "Injured - stable" }
         return "Unconscious but physiologically stable"
@@ -197,7 +241,7 @@ struct Casualty: Identifiable, Codable, Equatable, Sendable {
     var visibleSymptoms: String {
         if isDeceased { return "No spontaneous breathing or signs of circulation." }
         if isReceivingCPR {
-            return "No spontaneous breathing. External circulation is being supported by chest compressions."
+            return "No spontaneous breathing. The scenario is treating continuous compression coverage as active."
         }
         guard deteriorationProfile.requiresCPR else {
             return initialFindings[.injuries] ?? "No visible change."
@@ -225,10 +269,10 @@ struct Casualty: Identifiable, Codable, Equatable, Sendable {
                 return isDeceased ? "No response." : "Unresponsive to voice and pain."
             case .breathing:
                 return isReceivingCPR
-                    ? "No spontaneous breathing; CPR is in progress."
+                    ? "No spontaneous breathing; simulated CPR coverage is active."
                     : "Not breathing normally."
             case .perfusion:
-                if isReceivingCPR { return "No spontaneous pulse; circulation supported by compressions." }
+                if isReceivingCPR { return "No spontaneous pulse; simulated compression coverage is active." }
                 return "No palpable pulse or spontaneous circulation."
             case .injuries:
                 return visibleSymptoms
@@ -461,6 +505,192 @@ struct DecisionEvidence: Identifiable, Codable, Equatable, Sendable {
     }
 }
 
+// MARK: - Grounded AI coach
+
+struct AICoachEventPayload: Identifiable, Codable, Equatable, Sendable {
+    let id: String
+    let timestamp: String
+    let elapsedSeconds: Double
+    let category: String
+    let action: String
+    let actorRole: String?
+    let outcome: String
+    let rationale: String
+    let cues: [String]
+    let consequence: String
+    let recommendedAction: String?
+
+    init(evidence: DecisionEvidence) {
+        id = evidence.id.uuidString.lowercased()
+        timestamp = evidence.timestamp
+        elapsedSeconds = evidence.elapsed
+        category = evidence.category
+        action = evidence.action
+        actorRole = evidence.actorRole?.title
+        outcome = evidence.outcome.rawValue
+        rationale = evidence.rationale
+        cues = evidence.cues
+        consequence = evidence.consequence
+        recommendedAction = evidence.recommendedAction
+    }
+}
+
+struct AICoachRequest: Codable, Equatable, Sendable {
+    static let currentSchemaVersion = 1
+    static let maximumEventCount = 80
+    static let scenarioName = "Roadside mass-casualty incident simulation"
+
+    let schemaVersion: Int
+    let sessionID: String
+    let scenario: String
+    let scenarioPace: String
+    let score: ScoreBreakdown
+    let events: [AICoachEventPayload]
+
+    init(
+        sessionID: UUID = UUID(),
+        scenario: String = Self.scenarioName,
+        scenarioPace: ScenarioPace,
+        score: ScoreBreakdown,
+        evidence: [DecisionEvidence]
+    ) {
+        schemaVersion = Self.currentSchemaVersion
+        self.sessionID = sessionID.uuidString.lowercased()
+        self.scenario = scenario
+        self.scenarioPace = scenarioPace.title
+        self.score = score
+        events = Self.boundedEvents(evidence).map(AICoachEventPayload.init)
+    }
+
+    private static func boundedEvents(_ evidence: [DecisionEvidence]) -> [DecisionEvidence] {
+        guard evidence.count > maximumEventCount else { return evidence }
+
+        // Preserve scene entry plus the most recent decisions when an unusually long
+        // session exceeds the relay contract. UUID de-duplication keeps citations stable.
+        let candidates = Array(evidence.prefix(20)) + Array(evidence.suffix(maximumEventCount - 20))
+        var seen: Set<UUID> = []
+        return candidates.filter { seen.insert($0.id).inserted }
+    }
+}
+
+struct AICoachObservation: Codable, Equatable, Sendable {
+    let headline: String
+    let explanation: String
+    let evidenceEventIDs: [String]
+}
+
+struct AICoachReport: Codable, Equatable, Sendable {
+    static let currentSchemaVersion = 1
+    static let safetyDisclaimer = "Simulation coaching only — not clinical guidance or certification. Follow your organisation's approved protocol and instructor direction."
+
+    let schemaVersion: Int
+    let summary: String
+    let strongestDecision: AICoachObservation
+    let missedCue: AICoachObservation
+    let nextDrill: AICoachObservation
+    let disclaimer: String
+
+    init(
+        schemaVersion: Int = Self.currentSchemaVersion,
+        summary: String,
+        strongestDecision: AICoachObservation,
+        missedCue: AICoachObservation,
+        nextDrill: AICoachObservation,
+        disclaimer: String = Self.safetyDisclaimer
+    ) {
+        self.schemaVersion = schemaVersion
+        self.summary = summary
+        self.strongestDecision = strongestDecision
+        self.missedCue = missedCue
+        self.nextDrill = nextDrill
+        self.disclaimer = disclaimer
+    }
+
+    var observations: [AICoachObservation] {
+        [strongestDecision, missedCue, nextDrill]
+    }
+
+    func validated(against request: AICoachRequest) throws -> AICoachReport {
+        guard schemaVersion == Self.currentSchemaVersion,
+              Self.isValidText(summary, maximumLength: 300) else {
+            throw AICoachValidationError.invalidReport
+        }
+
+        let knownEventIDs = Set(request.events.map(\.id))
+        for observation in observations {
+            guard Self.isValidText(observation.headline, maximumLength: 80),
+                  Self.isValidText(observation.explanation, maximumLength: 360),
+                  (1...3).contains(observation.evidenceEventIDs.count),
+                  Set(observation.evidenceEventIDs).count == observation.evidenceEventIDs.count,
+                  observation.evidenceEventIDs.allSatisfy(knownEventIDs.contains) else {
+                throw AICoachValidationError.ungroundedObservation
+            }
+        }
+
+        // The app owns the safety language even when the prose comes from the relay.
+        return AICoachReport(
+            summary: summary,
+            strongestDecision: strongestDecision,
+            missedCue: missedCue,
+            nextDrill: nextDrill
+        )
+    }
+
+    static func localFallback(for request: AICoachRequest) throws -> AICoachReport {
+        guard let firstEvent = request.events.first else {
+            throw AICoachValidationError.noEvidence
+        }
+
+        let strongest = request.events.last(where: { $0.outcome == DecisionOutcome.succeeded.rawValue })
+            ?? request.events.last(where: { $0.outcome == DecisionOutcome.corrected.rawValue })
+            ?? firstEvent
+        let missed = request.events.last(where: { $0.outcome == DecisionOutcome.needsReview.rawValue })
+            ?? request.events.last(where: { $0.outcome == DecisionOutcome.scenarioUpdate.rawValue })
+            ?? firstEvent
+        let drill = request.events.last(where: {
+            guard let action = $0.recommendedAction else { return false }
+            return !action.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }) ?? missed
+
+        let strongestObservation = AICoachObservation(
+            headline: "Strongest recorded decision",
+            explanation: strongest.rationale,
+            evidenceEventIDs: [strongest.id]
+        )
+        let missedObservation = AICoachObservation(
+            headline: missed.outcome == DecisionOutcome.needsReview.rawValue
+                ? "Cue to catch earlier"
+                : "Decision point to review",
+            explanation: missed.consequence,
+            evidenceEventIDs: [missed.id]
+        )
+        let nextDrillObservation = AICoachObservation(
+            headline: "Next repetition",
+            explanation: drill.recommendedAction
+                ?? "Repeat the scenario and verbalise the visible cue before committing the next action.",
+            evidenceEventIDs: [drill.id]
+        )
+
+        return try AICoachReport(
+            summary: "Deterministic review of a \(request.score.total)/100 run, grounded in \(request.events.count) recorded decision events.",
+            strongestDecision: strongestObservation,
+            missedCue: missedObservation,
+            nextDrill: nextDrillObservation
+        ).validated(against: request)
+    }
+
+    private static func isValidText(_ text: String, maximumLength: Int) -> Bool {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return !trimmed.isEmpty && text.count <= maximumLength
+    }
+}
+
+enum AICoachValidationError: Error, Equatable {
+    case noEvidence
+    case invalidReport
+    case ungroundedObservation
+}
+
 struct SharedIncidentSnapshot: Codable, Equatable, Sendable {
     let revision: Int
     let phase: ScenarioPhase
@@ -468,13 +698,17 @@ struct SharedIncidentSnapshot: Codable, Equatable, Sendable {
     let casualties: [Casualty]
     let hazardIdentified: Bool
     let hazardCommunicated: Bool
-    let sceneSurveyed: Bool
+    let surveyedCheckpoints: Set<SurveyCheckpoint>
     let resourceRequestSent: Bool
     let deteriorationTriggered: Bool
     let events: [SessionEvent]
     let decisionEvidence: [DecisionEvidence]
     let elapsed: TimeInterval
     let conditionAlert: String?
+
+    var sceneSurveyed: Bool {
+        SurveyCheckpoint.required.isSubset(of: surveyedCheckpoints)
+    }
 }
 
 enum IncidentSnapshotDeliveryPolicy {
@@ -491,7 +725,7 @@ enum IncidentCommand: Codable, Sendable {
     case end
     case reset
     case setScenarioPace(ScenarioPace)
-    case markSurveyComplete
+    case inspectSurveyCheckpoint(SurveyCheckpoint)
     case identifyHazard
     case communicateHazard
     case requestResources
@@ -519,7 +753,7 @@ enum IncidentCommand: Codable, Sendable {
              .beginCPR(let casualtyID),
              .endCPR(let casualtyID, _):
             casualtyID
-        case .begin, .end, .reset, .setScenarioPace, .markSurveyComplete,
+        case .begin, .end, .reset, .setScenarioPace, .inspectSurveyCheckpoint,
              .identifyHazard, .communicateHazard, .requestResources,
              .closeCasualty:
             nil
@@ -536,8 +770,8 @@ enum IncidentCommand: Codable, Sendable {
             "reset the incident"
         case .setScenarioPace(let pace):
             "set the exercise pace to \(pace.title)"
-        case .markSurveyComplete:
-            "complete the scene survey"
+        case .inspectSurveyCheckpoint(let checkpoint):
+            "inspect the \(checkpoint.title.lowercased())"
         case .identifyHazard:
             "identify the fuel hazard"
         case .communicateHazard:
@@ -562,7 +796,7 @@ enum IncidentCommand: Codable, Sendable {
     func isPermitted(for role: ResponderRole) -> Bool {
         if role == .instructor { return true }
         switch self {
-        case .begin, .end, .reset, .setScenarioPace, .markSurveyComplete, .identifyHazard, .communicateHazard, .requestResources:
+        case .begin, .end, .reset, .setScenarioPace, .inspectSurveyCheckpoint, .identifyHazard, .communicateHazard, .requestResources:
             return role == .incidentCommander
         case .assignPriority:
             return role == .triageOfficer
@@ -577,7 +811,7 @@ enum IncidentCommand: Codable, Sendable {
 
     var permissionDescription: String {
         switch self {
-        case .begin, .end, .reset, .setScenarioPace, .markSurveyComplete, .identifyHazard, .communicateHazard, .requestResources:
+        case .begin, .end, .reset, .setScenarioPace, .inspectSurveyCheckpoint, .identifyHazard, .communicateHazard, .requestResources:
             "This action belongs to the Incident Commander."
         case .assignPriority:
             "Priority assignment belongs to the Triage Officer."
