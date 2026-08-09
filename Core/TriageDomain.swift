@@ -22,7 +22,7 @@ enum ScenarioPace: String, CaseIterable, Identifiable, Codable, Sendable {
 
     var title: String {
         switch self {
-        case .demo: "Demo 8x"
+        case .demo: "Judge demo · 8x"
         case .realtime: "Realtime"
         }
     }
@@ -30,7 +30,7 @@ enum ScenarioPace: String, CaseIterable, Identifiable, Codable, Sendable {
     var detail: String {
         switch self {
         case .demo:
-            "Clinical deterioration runs at 8x; CPR hold duration remains real-time."
+            "A three-minute judge path with 8x deterioration; spatial interactions and CPR holds remain real-time."
         case .realtime:
             "Clinical deterioration and responder actions use real elapsed time."
         }
@@ -92,6 +92,43 @@ enum SurveyCheckpoint: String, CaseIterable, Identifiable, Codable, Hashable, Se
     }
 }
 
+/// A headset-orientation coverage map divided into 12 equal 30-degree segments.
+/// This records deliberate head direction, not eye gaze or proof that every object
+/// inside a segment was perceived.
+enum SurveyCoverage {
+    static let binCount = 12
+
+    static var allBins: Set<Int> {
+        Set(0..<binCount)
+    }
+
+    static func normalizedBin(_ bin: Int) -> Int {
+        let remainder = bin % binCount
+        return remainder >= 0 ? remainder : remainder + binCount
+    }
+
+    static func binsVisible(around centreBin: Int) -> Set<Int> {
+        Set((-1...1).map { normalizedBin(centreBin + $0) })
+    }
+
+    static func requiredBins(for checkpoint: SurveyCheckpoint) -> Set<Int> {
+        switch checkpoint {
+        case .forward: [11, 0, 1]
+        case .rightFlank: [2, 3, 4]
+        case .rear: [5, 6, 7]
+        case .leftFlank: [8, 9, 10]
+        }
+    }
+
+    static func completedCheckpoints(for bins: Set<Int>) -> Set<SurveyCheckpoint> {
+        Set(SurveyCheckpoint.allCases.filter { requiredBins(for: $0).isSubset(of: bins) })
+    }
+
+    static func fractionCovered(_ bins: Set<Int>) -> Double {
+        Double(bins.intersection(allBins).count) / Double(binCount)
+    }
+}
+
 struct SceneSurveySample: Equatable, Sendable {
     let timestamp: TimeInterval
     let forward: SpatialVector3
@@ -99,17 +136,19 @@ struct SceneSurveySample: Equatable, Sendable {
 
 struct SceneSurveyObservation: Equatable, Sendable {
     let checkpoint: SurveyCheckpoint?
+    let coverageBin: Int?
     let progress: Double
     let isStable: Bool
+    let newlyCoveredBins: Set<Int>
     let newlyCompletedCheckpoint: SurveyCheckpoint?
 }
 
 /// Converts headset orientation samples into deliberate scene-survey evidence.
 ///
-/// The first valid horizontal sample establishes the user's forward sector. A sector
-/// only completes after the user holds a reasonably level, stable view there. This
-/// prevents a fast head turn or an accidental upward/downward glance from satisfying
-/// the safety task.
+/// The first valid horizontal sample establishes the user's relative forward heading.
+/// A 90-degree view cone adds coverage only after the user holds a reasonably level,
+/// stable view. This prevents a fast turn or accidental vertical glance from filling
+/// the 12-segment safety map.
 struct SceneSurveyEngine: Sendable {
     static let requiredDwellDuration: TimeInterval = 0.8
 
@@ -118,25 +157,42 @@ struct SceneSurveyEngine: Sendable {
     private var referenceYaw: Float?
     private var previousYaw: Float?
     private var previousTimestamp: TimeInterval?
-    private var candidateCheckpoint: SurveyCheckpoint?
+    private var candidateCoverageBin: Int?
     private var candidateStartedAt: TimeInterval?
     private var completedCheckpoints: Set<SurveyCheckpoint> = []
+    private var completedCoverageBins: Set<Int> = []
 
     mutating func reset() {
         referenceYaw = nil
         previousYaw = nil
         previousTimestamp = nil
-        candidateCheckpoint = nil
+        candidateCoverageBin = nil
         candidateStartedAt = nil
         completedCheckpoints = []
+        completedCoverageBins = []
     }
 
     mutating func synchronizeCompleted(_ checkpoints: Set<SurveyCheckpoint>) {
         // Keep locally completed evidence until the host-authoritative snapshot arrives.
         // Shared commands use reliable delivery, but the next pose sample can arrive first.
         completedCheckpoints.formUnion(checkpoints)
-        if let candidateCheckpoint, checkpoints.contains(candidateCheckpoint) {
-            self.candidateCheckpoint = nil
+        if let candidateCoverageBin,
+           SurveyCoverage.binsVisible(around: candidateCoverageBin)
+            .isSubset(of: completedCoverageBins) {
+            self.candidateCoverageBin = nil
+            candidateStartedAt = nil
+        }
+    }
+
+    mutating func synchronizeCoverage(_ bins: Set<Int>) {
+        completedCoverageBins.formUnion(bins.intersection(SurveyCoverage.allBins))
+        completedCheckpoints.formUnion(
+            SurveyCoverage.completedCheckpoints(for: completedCoverageBins)
+        )
+        if let candidateCoverageBin,
+           SurveyCoverage.binsVisible(around: candidateCoverageBin)
+            .isSubset(of: completedCoverageBins) {
+            self.candidateCoverageBin = nil
             candidateStartedAt = nil
         }
     }
@@ -144,7 +200,7 @@ struct SceneSurveyEngine: Sendable {
     mutating func interruptDwell() {
         previousYaw = nil
         previousTimestamp = nil
-        candidateCheckpoint = nil
+        candidateCoverageBin = nil
         candidateStartedAt = nil
     }
 
@@ -161,7 +217,7 @@ struct SceneSurveyEngine: Sendable {
 
         let verticalComponent = abs(forward.y / length)
         guard verticalComponent <= maximumVerticalForwardComponent else {
-            candidateCheckpoint = nil
+            candidateCoverageBin = nil
             candidateStartedAt = nil
             return invalidObservation()
         }
@@ -172,6 +228,8 @@ struct SceneSurveyEngine: Sendable {
         }
         let relativeYaw = Self.normalizedAngle(yaw - (referenceYaw ?? yaw))
         let checkpoint = Self.checkpoint(forRelativeYaw: relativeYaw)
+        let coverageBin = Self.coverageBin(forRelativeYaw: relativeYaw)
+        let visibleBins = SurveyCoverage.binsVisible(around: coverageBin)
 
         let isStable: Bool
         if let previousYaw, let previousTimestamp {
@@ -188,30 +246,34 @@ struct SceneSurveyEngine: Sendable {
         self.previousYaw = yaw
         previousTimestamp = sample.timestamp
 
-        guard !completedCheckpoints.contains(checkpoint) else {
-            candidateCheckpoint = nil
+        guard !visibleBins.isSubset(of: completedCoverageBins) else {
+            candidateCoverageBin = nil
             candidateStartedAt = nil
             return SceneSurveyObservation(
                 checkpoint: checkpoint,
+                coverageBin: coverageBin,
                 progress: 1,
                 isStable: isStable,
+                newlyCoveredBins: [],
                 newlyCompletedCheckpoint: nil
             )
         }
 
         guard isStable else {
-            candidateCheckpoint = nil
+            candidateCoverageBin = nil
             candidateStartedAt = nil
             return SceneSurveyObservation(
                 checkpoint: checkpoint,
+                coverageBin: coverageBin,
                 progress: 0,
                 isStable: false,
+                newlyCoveredBins: [],
                 newlyCompletedCheckpoint: nil
             )
         }
 
-        if candidateCheckpoint != checkpoint {
-            candidateCheckpoint = checkpoint
+        if candidateCoverageBin != coverageBin {
+            candidateCoverageBin = coverageBin
             candidateStartedAt = sample.timestamp
         }
 
@@ -220,20 +282,33 @@ struct SceneSurveyEngine: Sendable {
         guard progress >= 1 else {
             return SceneSurveyObservation(
                 checkpoint: checkpoint,
+                coverageBin: coverageBin,
                 progress: progress,
                 isStable: true,
+                newlyCoveredBins: [],
                 newlyCompletedCheckpoint: nil
             )
         }
 
-        completedCheckpoints.insert(checkpoint)
-        candidateCheckpoint = nil
+        let previouslyCompleted = completedCheckpoints
+        let newlyCoveredBins = visibleBins.subtracting(completedCoverageBins)
+        completedCoverageBins.formUnion(newlyCoveredBins)
+        completedCheckpoints.formUnion(
+            SurveyCoverage.completedCheckpoints(for: completedCoverageBins)
+        )
+        let newlyCompletedCheckpoint = completedCheckpoints
+            .subtracting(previouslyCompleted)
+            .sorted { $0.rawValue < $1.rawValue }
+            .first
+        candidateCoverageBin = nil
         candidateStartedAt = nil
         return SceneSurveyObservation(
             checkpoint: checkpoint,
+            coverageBin: coverageBin,
             progress: 1,
             isStable: true,
-            newlyCompletedCheckpoint: checkpoint
+            newlyCoveredBins: newlyCoveredBins,
+            newlyCompletedCheckpoint: newlyCompletedCheckpoint
         )
     }
 
@@ -241,10 +316,17 @@ struct SceneSurveyEngine: Sendable {
         interruptDwell()
         return SceneSurveyObservation(
             checkpoint: nil,
+            coverageBin: nil,
             progress: 0,
             isStable: false,
+            newlyCoveredBins: [],
             newlyCompletedCheckpoint: nil
         )
+    }
+
+    private static func coverageBin(forRelativeYaw yaw: Float) -> Int {
+        let step = (2 * Float.pi) / Float(SurveyCoverage.binCount)
+        return SurveyCoverage.normalizedBin(Int(round(yaw / step)))
     }
 
     private static func checkpoint(forRelativeYaw yaw: Float) -> SurveyCheckpoint {
@@ -877,6 +959,7 @@ struct SharedIncidentSnapshot: Codable, Equatable, Sendable {
     let hazardIdentified: Bool
     let hazardCommunicated: Bool
     let surveyedCheckpoints: Set<SurveyCheckpoint>
+    let surveyCoverageBins: Set<Int>
     let resourceRequestSent: Bool
     let deteriorationTriggered: Bool
     let events: [SessionEvent]
@@ -885,7 +968,7 @@ struct SharedIncidentSnapshot: Codable, Equatable, Sendable {
     let conditionAlert: String?
 
     var sceneSurveyed: Bool {
-        SurveyCheckpoint.required.isSubset(of: surveyedCheckpoints)
+        SurveyCoverage.allBins.isSubset(of: surveyCoverageBins)
     }
 }
 
@@ -904,6 +987,7 @@ enum IncidentCommand: Codable, Sendable {
     case reset
     case setScenarioPace(ScenarioPace)
     case inspectSurveyCheckpoint(SurveyCheckpoint)
+    case recordSurveyCoverage([Int])
     case identifyHazard
     case communicateHazard
     case requestResources
@@ -932,7 +1016,7 @@ enum IncidentCommand: Codable, Sendable {
              .endCPR(let casualtyID, _):
             casualtyID
         case .begin, .end, .reset, .setScenarioPace, .inspectSurveyCheckpoint,
-             .identifyHazard, .communicateHazard, .requestResources,
+             .recordSurveyCoverage, .identifyHazard, .communicateHazard, .requestResources,
              .closeCasualty:
             nil
         }
@@ -950,6 +1034,8 @@ enum IncidentCommand: Codable, Sendable {
             "set the exercise pace to \(pace.title)"
         case .inspectSurveyCheckpoint(let checkpoint):
             "inspect the \(checkpoint.title.lowercased())"
+        case .recordSurveyCoverage:
+            "record automatic scene-survey coverage"
         case .identifyHazard:
             "identify the fuel hazard"
         case .communicateHazard:
@@ -974,7 +1060,7 @@ enum IncidentCommand: Codable, Sendable {
     func isPermitted(for role: ResponderRole) -> Bool {
         if role == .instructor { return true }
         switch self {
-        case .begin, .end, .reset, .setScenarioPace, .inspectSurveyCheckpoint, .identifyHazard, .communicateHazard, .requestResources:
+        case .begin, .end, .reset, .setScenarioPace, .inspectSurveyCheckpoint, .recordSurveyCoverage, .identifyHazard, .communicateHazard, .requestResources:
             return role == .incidentCommander
         case .assignPriority:
             return role == .triageOfficer
@@ -989,7 +1075,7 @@ enum IncidentCommand: Codable, Sendable {
 
     var permissionDescription: String {
         switch self {
-        case .begin, .end, .reset, .setScenarioPace, .inspectSurveyCheckpoint, .identifyHazard, .communicateHazard, .requestResources:
+        case .begin, .end, .reset, .setScenarioPace, .inspectSurveyCheckpoint, .recordSurveyCoverage, .identifyHazard, .communicateHazard, .requestResources:
             "This action belongs to the Incident Commander."
         case .assignPriority:
             "Priority assignment belongs to the Triage Officer."

@@ -20,8 +20,8 @@ The experience follows the product storyboard:
 2. **Entry:** Choose Enter Incident.
    The briefing Window closes and the mixed Immersive Space opens.
 3. **Scene survey:** Three casualties, two vehicles, and one fuel hazard appear around the trainee.
-   Physically turn through the scene and briefly hold a level view toward the front, left, rear, and right sectors.
-   Vision Pro headset orientation verifies the survey automatically; the directional scan gates are visual guidance, not buttons.
+   Physically turn through the scene and briefly hold a level view in each direction.
+   Vision Pro headset orientation fills a continuous 12-segment coverage map automatically; the directional scan gates are visual guidance, not buttons.
 4. **Casualty selection:** Look at a casualty and pinch.
 5. **Assessment:** A compact information card moves beside the selected casualty.
    Reach to the highlighted 3D assessment target and hold the required hand pose so ARKit can verify the response, breathing, perfusion, and injury checks.
@@ -30,7 +30,7 @@ The experience follows the product storyboard:
 7. **Condition change:** Jordan's fictional untreated cardiac-arrest state progresses on an exercise clock, while sustained simulated CPR coverage pauses deterioration.
    Reassess and retag Jordan as the evidence changes.
 8. **Debrief:** Choose Finish & Debrief.
-   The Immersive Space closes and the Window reopens with metrics, personalised coaching, and an evidence replay explaining why each decision succeeded or failed.
+   The Immersive Space closes and the Window reopens with metrics, a competency summary, personalised coaching, an evidence replay, and an exportable instructor report.
 
 The yellow fuel spill is interactive.
 After identifying it, use the incident panel to report it and request resources.
@@ -46,20 +46,28 @@ After identifying it, use the incident panel to report it and request resources.
 - **Verified spatial assessment:** On Vision Pro, ARKit hand tracking verifies that the trainee reaches and sustains the correct pose at a casualty's highlighted 3D target.
   The breathing check verifies an open hand from four tracked fingertips, and the perfusion check verifies fingertip pinch distance.
   The Simulator exposes the same assessment sequence through target pinches for repeatable demos.
-- **Automatic spatial scene survey:** ARKit world tracking samples Vision Pro's forward direction and requires a stable 0.8-second dwell in four relative sectors.
-  Fast turns, steep vertical glances, and duplicate sectors do not count, and the directional scan gates are intentionally non-interactive.
+- **Continuous automatic scene survey:** ARKit world tracking samples Vision Pro's forward direction and requires a stable 0.8-second dwell before adding a 90-degree view cone to a 12-segment coverage map.
+  Fast turns, steep vertical glances, duplicate coverage, and untracked device poses do not count; tracking loss pauses visibly and retains completed coverage.
+  The detector records deliberate head direction—not eye gaze or proof that every object was perceived—and the scan gates remain intentionally non-interactive.
   Survey progress is host-authoritative, synchronized through SharePlay, and preserved in the evidence timeline.
 - **Collaborative incident command:** SharePlay synchronises one host-authoritative incident across participants.
   Incident commander, triage officer, airway responder, and instructor roles have explicit permissions, visible responsibilities, and shared immersive-space placement.
   Each responder navigates casualties independently, while every assessment, tag, and treatment command carries an explicit casualty target to the host.
   Out-of-role attempts are rejected without changing state and become attributed evidence in the debrief.
-- **Stage-ready timing:** Demo 8x is the default exercise pace, bringing the fictional six-minute escalation threshold into 45 real seconds and the ten-minute scenario threshold into 75 real seconds.
+- **Stage-ready judge path:** Judge demo · 8x is the default exercise pace, with an in-scene four-beat progress strip for Survey, Hazard, Stabilise, and Debrief.
+  It brings the fictional six-minute escalation threshold into 45 real seconds and the ten-minute scenario threshold into 75 real seconds.
   Simulated CPR coverage credit uses real hold duration, while Realtime remains available from the briefing.
   The hold represents continuous team coverage and does not measure physical compression rate, depth, or recoil.
+- **Versioned training content and instructor export:** The scenario is a validated, Codable definition with versioned objectives and casualty templates rather than session-controller constants.
+  The after-action review exports a JSON instructor report containing the score, competency evidence, 12-segment survey coverage, casualty outcomes, event log, replay evidence, scenario version, and training boundary.
+- **Demo confidence:** The briefing shows spatial-runtime, asset, coach, and incident-mode readiness before entry.
+  Original earcons confirm survey progress, survey completion, and hazard recognition without replacing the visible state.
 
-The project includes a small Swift package for deterministic tests of spatial verification, staged scenario timing, role permissions, transport policy, and collaboration message encoding.
+The project includes a small Swift package for deterministic tests of continuous survey coverage, scenario validation, spatial verification, staged timing, role permissions, transport policy, and collaboration message encoding.
 
 Run `swift test` from the repository root to execute those tests.
+Run `python3 Scripts/validate_assets.py` to check USDZ structure, alignment, unsafe paths, unsupported EXR files, earcon format, and the panorama.
+GitHub Actions runs those checks plus relay validation for every pull request.
 
 ## Demo runbook
 
@@ -67,14 +75,15 @@ Run `swift test` from the repository root to execute those tests.
    Keep the default Demo 8x pace for a short presentation, or select Realtime for an unaccelerated exercise.
 2. Have participants join the activity and select Triage Officer, Airway Responder, or Instructor.
    The host owns the incident clock and authoritative state while every role receives the same scene updates.
-3. Let the Incident Commander turn through the full environment and briefly hold a level view in the front, left, rear, and right sectors while each scan gate turns green automatically.
+3. Let the Incident Commander turn through the full environment and briefly hold a level view while the 12-segment coverage map fills and each completed zone turns green automatically.
    Then identify the fuel spill, report the hazard, and request resources.
 4. Let the Triage Officer select a casualty, then reach to each highlighted marker.
    Response and injury checks use fingertip placement, breathing requires a sustained open hand over the chest, and perfusion requires a sustained fingertip pinch at the wrist.
 5. Let the Airway Responder maintain the red CPR target for Jordan while the Triage Officer assigns priorities from the verified findings.
    Describe this as simulated CPR coverage for coordination training, not physical CPR-quality assessment.
-6. End the scenario and use the replay control to step through successful, failed, corrected, and system-generated events.
+6. End the scenario, review the competency summary, and use the replay control to step through successful, failed, corrected, and system-generated events.
    Each stop shows the responsible role, evidence available at that moment, causal explanation, consequence, next best action when relevant, and reconstructed incident state.
+   Export the instructor report to retain the full evidence package outside the app.
 
 On the visionOS Simulator, pinch each highlighted assessment marker to produce deterministic simulated spatial evidence.
 ARKit hand-pose and headset-orientation verification run only on supported Vision Pro hardware; Simulator identifies this limitation instead of fabricating survey evidence.

@@ -13,12 +13,14 @@ struct SceneSurveyEngineTests {
 
         let completed = engine.observe(sample: sample(at: 10.9, yawDegrees: 0))
         #expect(completed.newlyCompletedCheckpoint == .forward)
+        #expect(completed.newlyCoveredBins == [11, 0, 1])
         #expect(completed.progress == 1)
 
         // A shared host snapshot can lag behind the locally completed sample.
         engine.synchronizeCompleted([])
         let duplicate = engine.observe(sample: sample(at: 12, yawDegrees: 0))
         #expect(duplicate.newlyCompletedCheckpoint == nil)
+        #expect(duplicate.newlyCoveredBins.isEmpty)
         #expect(duplicate.progress == 1)
     }
 
@@ -49,6 +51,24 @@ struct SceneSurveyEngineTests {
             complete(yawDegrees: 105, startingAt: 36, engine: &engine)
                 == .rightFlank
         )
+    }
+
+    @Test
+    func fourDeliberateHeadingsFillAllTwelveCoverageSegments() {
+        var engine = SceneSurveyEngine()
+        var coverage: Set<Int> = []
+        let headings: [Float] = [0, 90, 180, -90]
+
+        for (index, yaw) in headings.enumerated() {
+            _ = engine.observe(sample: sample(at: 60 + Double(index * 2), yawDegrees: yaw))
+            let observation = engine.observe(
+                sample: sample(at: 60.9 + Double(index * 2), yawDegrees: yaw)
+            )
+            coverage.formUnion(observation.newlyCoveredBins)
+        }
+
+        #expect(coverage == SurveyCoverage.allBins)
+        #expect(SurveyCoverage.completedCheckpoints(for: coverage) == SurveyCheckpoint.required)
     }
 
     @Test

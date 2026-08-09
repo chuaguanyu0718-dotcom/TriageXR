@@ -46,6 +46,7 @@ enum SceneSurveyTrackingStatus: Equatable {
     case idle
     case starting
     case tracking
+    case temporarilyLost
     case simulatorUnavailable
     case unavailable(String)
 
@@ -54,6 +55,7 @@ enum SceneSurveyTrackingStatus: Equatable {
         case .idle: "Automatic survey idle"
         case .starting: "Starting headset tracking"
         case .tracking: "Automatic survey active"
+        case .temporarilyLost: "Headset pose temporarily lost"
         case .simulatorUnavailable: "Headset survey requires Vision Pro"
         case .unavailable: "Automatic survey unavailable"
         }
@@ -66,7 +68,9 @@ enum SceneSurveyTrackingStatus: Equatable {
         case .starting:
             "Waiting for a tracked Vision Pro device pose."
         case .tracking:
-            "Turn naturally and hold your view briefly in each sector. Headset orientation is verified automatically; no selection is required."
+            "Turn naturally and hold a level view. Headset direction fills a 12-segment coverage map automatically; no selection is required."
+        case .temporarilyLost:
+            "Tracking paused. Look forward, remain within the mapped space, and wait for the coverage indicator to resume."
         case .simulatorUnavailable:
             "Simulator does not provide ARKit device-pose data. Test the workflow here, then verify the automatic survey on Vision Pro hardware."
         case .unavailable(let message):
@@ -100,6 +104,7 @@ final class SpatialAssessmentCoordinator: ObservableObject {
     private var lastSubmittedKey: String?
     private var activeTargetKey: String?
     private var activeHand: HandAnchor.Chirality?
+    private var missingDevicePoseSince: TimeInterval?
 
     init(trainingSession: TrainingSession) {
         self.trainingSession = trainingSession
@@ -195,6 +200,7 @@ final class SpatialAssessmentCoordinator: ObservableObject {
         surveyCurrentCheckpoint = nil
         surveyProgress = 0
         surveyIsStable = false
+        missingDevicePoseSince = nil
         lastSubmittedKey = nil
         activeTargetKey = nil
         activeHand = nil
@@ -223,9 +229,16 @@ final class SpatialAssessmentCoordinator: ObservableObject {
             let timestamp = CACurrentMediaTime()
             if let anchor = worldProvider.queryDeviceAnchor(atTimestamp: timestamp),
                anchor.isTracked {
+                missingDevicePoseSince = nil
+                surveyStatus = .tracking
                 process(deviceAnchor: anchor, timestamp: timestamp)
             } else {
                 resetSurveyProgress(keepReference: true)
+                if missingDevicePoseSince == nil {
+                    missingDevicePoseSince = timestamp
+                } else if timestamp - (missingDevicePoseSince ?? timestamp) >= 1 {
+                    surveyStatus = .temporarilyLost
+                }
             }
 
             do {
@@ -249,6 +262,7 @@ final class SpatialAssessmentCoordinator: ObservableObject {
         }
 
         surveyEngine.synchronizeCompleted(trainingSession.surveyedCheckpoints)
+        surveyEngine.synchronizeCoverage(trainingSession.surveyCoverageBins)
         let transform = deviceAnchor.originFromAnchorTransform
         let observation = surveyEngine.observe(
             sample: SceneSurveySample(
@@ -264,8 +278,8 @@ final class SpatialAssessmentCoordinator: ObservableObject {
         surveyProgress = observation.progress
         surveyIsStable = observation.isStable
 
-        if let checkpoint = observation.newlyCompletedCheckpoint {
-            submitCommand?(.inspectSurveyCheckpoint(checkpoint))
+        if !observation.newlyCoveredBins.isEmpty {
+            submitCommand?(.recordSurveyCoverage(Array(observation.newlyCoveredBins).sorted()))
         }
     }
 
