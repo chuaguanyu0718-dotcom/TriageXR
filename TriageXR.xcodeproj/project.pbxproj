@@ -78,6 +78,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = TriageXR;
 				INFOPLIST_KEY_NSHandsTrackingUsageDescription = "TriageXR uses hand tracking to verify spatial casualty assessments and CPR interactions.";
+				INFOPLIST_KEY_NSWorldSensingUsageDescription = "TriageXR uses headset orientation to verify that responders deliberately survey every scene sector.";
 				INFOPLIST_KEY_TRIAGEXRCoachURL = "$(TRIAGEXR_COACH_URL)";
 				INFOPLIST_KEY_UIApplicationPreferredDefaultSceneSessionRole = UIWindowSceneSessionRoleApplication;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
@@ -107,6 +108,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = TriageXR;
 				INFOPLIST_KEY_NSHandsTrackingUsageDescription = "TriageXR uses hand tracking to verify spatial casualty assessments and CPR interactions.";
+				INFOPLIST_KEY_NSWorldSensingUsageDescription = "TriageXR uses headset orientation to verify that responders deliberately survey every scene sector.";
 				INFOPLIST_KEY_TRIAGEXRCoachURL = "$(TRIAGEXR_COACH_URL)";
 				INFOPLIST_KEY_UIApplicationPreferredDefaultSceneSessionRole = UIWindowSceneSessionRoleApplication;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;

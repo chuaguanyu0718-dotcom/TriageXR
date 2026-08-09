@@ -1,6 +1,7 @@
 import ARKit
 import Combine
 import Foundation
+import QuartzCore
 import simd
 
 enum HandTrackingStatus: Equatable {
@@ -15,7 +16,7 @@ enum HandTrackingStatus: Equatable {
         case .idle: "Spatial verification idle"
         case .starting: "Starting hand tracking"
         case .tracking: "Hand tracking active"
-        case .simulator: "Simulator spatial targets active"
+        case .simulator: "Simulator assessment fallback"
         case .unavailable: "Hand tracking unavailable"
         }
     }
@@ -27,9 +28,9 @@ enum HandTrackingStatus: Equatable {
         case .starting:
             "Waiting for Vision Pro hand-anchor data."
         case .tracking:
-            "Clinical findings unlock only after the required hand pose is sustained at the spatial marker."
+            "Scenario findings unlock only after the required hand pose is sustained at the spatial marker."
         case .simulator:
-            "Pinch the highlighted 3D marker to provide simulated spatial evidence."
+            "ARKit hand tracking is unavailable in Simulator. Pinch the highlighted assessment marker to exercise the remaining flow."
         case .unavailable(let message):
             message
         }
@@ -41,19 +42,61 @@ enum HandTrackingStatus: Equatable {
     }
 }
 
+enum SceneSurveyTrackingStatus: Equatable {
+    case idle
+    case starting
+    case tracking
+    case simulatorUnavailable
+    case unavailable(String)
+
+    var title: String {
+        switch self {
+        case .idle: "Automatic survey idle"
+        case .starting: "Starting headset tracking"
+        case .tracking: "Automatic survey active"
+        case .simulatorUnavailable: "Headset survey requires Vision Pro"
+        case .unavailable: "Automatic survey unavailable"
+        }
+    }
+
+    var detail: String {
+        switch self {
+        case .idle:
+            "Enter the incident to begin automatic scene-survey verification."
+        case .starting:
+            "Waiting for a tracked Vision Pro device pose."
+        case .tracking:
+            "Turn naturally and hold your view briefly in each sector. Headset orientation is verified automatically; no selection is required."
+        case .simulatorUnavailable:
+            "Simulator does not provide ARKit device-pose data. Test the workflow here, then verify the automatic survey on Vision Pro hardware."
+        case .unavailable(let message):
+            message
+        }
+    }
+}
+
 @MainActor
 final class SpatialAssessmentCoordinator: ObservableObject {
     @Published private(set) var status: HandTrackingStatus = .idle
     @Published private(set) var activeAssessment: Assessment?
     @Published private(set) var progress: Double = 0
     @Published private(set) var proximityMetres: Double?
+    @Published private(set) var surveyStatus: SceneSurveyTrackingStatus = .idle
+    @Published private(set) var surveyCurrentCheckpoint: SurveyCheckpoint?
+    @Published private(set) var surveyProgress: Double = 0
+    @Published private(set) var surveyIsStable = false
 
     private weak var trainingSession: TrainingSession?
     private var submitCommand: ((IncidentCommand) -> Void)?
+    private var canSubmitSurveyEvidence: (() -> Bool)?
     private let arSession = ARKitSession()
-    private let provider = HandTrackingProvider()
+    private let handProvider = HandTrackingProvider()
+    private let worldProvider = WorldTrackingProvider()
     private var engine = SpatialAssessmentEngine()
-    private var trackingTask: Task<Void, Never>?
+    private var surveyEngine = SceneSurveyEngine()
+    private var sessionTask: Task<Void, Never>?
+    private var handTrackingTask: Task<Void, Never>?
+    private var surveyTrackingTask: Task<Void, Never>?
     private var lastSubmittedKey: String?
     private var activeTargetKey: String?
     private var activeHand: HandAnchor.Chirality?
@@ -66,60 +109,175 @@ final class SpatialAssessmentCoordinator: ObservableObject {
         submitCommand = submitter
     }
 
+    func installSurveyPermissionProvider(_ provider: @escaping () -> Bool) {
+        canSubmitSurveyEvidence = provider
+    }
+
     func start() {
-        guard trackingTask == nil else { return }
+        guard sessionTask == nil else { return }
 
 #if targetEnvironment(simulator)
         status = .simulator
+        surveyStatus = .simulatorUnavailable
         return
 #else
-        guard HandTrackingProvider.isSupported else {
-            status = .unavailable("This Vision Pro does not support ARKit hand tracking.")
+        let supportsHands = HandTrackingProvider.isSupported
+        let supportsWorldTracking = WorldTrackingProvider.isSupported
+
+        status = supportsHands
+            ? .starting
+            : .unavailable("This Vision Pro does not support ARKit hand tracking.")
+        surveyStatus = supportsWorldTracking
+            ? .starting
+            : .unavailable("This device cannot provide the world-tracking pose required for an automatic scene survey.")
+
+        guard supportsHands || supportsWorldTracking else {
             return
         }
 
-        status = .starting
-        trackingTask = Task { [weak self] in
+        sessionTask = Task { [weak self] in
             guard let self else { return }
-            defer { trackingTask = nil }
             do {
-                try await arSession.run([provider])
-                guard !Task.isCancelled else { return }
-                status = .tracking
-
-                for await update in provider.anchorUpdates {
-                    guard !Task.isCancelled else { return }
-                    process(anchor: update.anchor)
+                if supportsHands && supportsWorldTracking {
+                    try await arSession.run([handProvider, worldProvider])
+                } else if supportsHands {
+                    try await arSession.run([handProvider])
+                } else {
+                    try await arSession.run([worldProvider])
                 }
                 guard !Task.isCancelled else { return }
-                arSession.stop()
-                status = .unavailable(
-                    "The hand-anchor stream ended. Retry spatial verification."
-                )
+
+                if supportsHands {
+                    status = .tracking
+                    handTrackingTask = Task { [weak self] in
+                        await self?.consumeHandAnchors()
+                    }
+                }
+                if supportsWorldTracking {
+                    surveyStatus = .tracking
+                    surveyTrackingTask = Task { [weak self] in
+                        await self?.consumeDevicePose()
+                    }
+                }
             } catch is CancellationError {
                 return
             } catch {
                 arSession.stop()
-                status = .unavailable(
-                    "Vision Pro could not provide hand anchors. Check hand-tracking permission, then retry."
-                )
+                if supportsHands {
+                    status = .unavailable(
+                        "Vision Pro could not provide hand anchors. Check hand-tracking permission, then re-enter the incident."
+                    )
+                }
+                if supportsWorldTracking {
+                    surveyStatus = .unavailable(
+                        "Vision Pro could not provide a device pose. Check world-sensing permission, then re-enter the incident."
+                    )
+                }
+                sessionTask = nil
             }
         }
 #endif
     }
 
     func stop() {
-        trackingTask?.cancel()
-        trackingTask = nil
+        sessionTask?.cancel()
+        handTrackingTask?.cancel()
+        surveyTrackingTask?.cancel()
+        sessionTask = nil
+        handTrackingTask = nil
+        surveyTrackingTask = nil
         arSession.stop()
         engine.reset()
+        surveyEngine.reset()
         activeAssessment = nil
         progress = 0
         proximityMetres = nil
+        surveyCurrentCheckpoint = nil
+        surveyProgress = 0
+        surveyIsStable = false
         lastSubmittedKey = nil
         activeTargetKey = nil
         activeHand = nil
         status = .idle
+        surveyStatus = .idle
+    }
+
+    func restart() {
+        stop()
+        start()
+    }
+
+    private func consumeHandAnchors() async {
+        for await update in handProvider.anchorUpdates {
+            guard !Task.isCancelled else { return }
+            process(anchor: update.anchor)
+        }
+        guard !Task.isCancelled else { return }
+        status = .unavailable(
+            "The hand-anchor stream ended. Re-enter the incident to retry spatial assessment verification."
+        )
+    }
+
+    private func consumeDevicePose() async {
+        while !Task.isCancelled {
+            let timestamp = CACurrentMediaTime()
+            if let anchor = worldProvider.queryDeviceAnchor(atTimestamp: timestamp),
+               anchor.isTracked {
+                process(deviceAnchor: anchor, timestamp: timestamp)
+            } else {
+                resetSurveyProgress(keepReference: true)
+            }
+
+            do {
+                try await Task.sleep(for: .milliseconds(50))
+            } catch {
+                return
+            }
+        }
+    }
+
+    private func process(deviceAnchor: DeviceAnchor, timestamp: TimeInterval) {
+        guard let trainingSession,
+              trainingSession.phase == .active else {
+            resetSurveyProgress()
+            return
+        }
+
+        guard canSubmitSurveyEvidence?() ?? true else {
+            resetSurveyProgress(keepReference: true)
+            return
+        }
+
+        surveyEngine.synchronizeCompleted(trainingSession.surveyedCheckpoints)
+        let transform = deviceAnchor.originFromAnchorTransform
+        let observation = surveyEngine.observe(
+            sample: SceneSurveySample(
+                timestamp: timestamp,
+                forward: SpatialVector3(
+                    x: -transform.columns.2.x,
+                    y: -transform.columns.2.y,
+                    z: -transform.columns.2.z
+                )
+            )
+        )
+        surveyCurrentCheckpoint = observation.checkpoint
+        surveyProgress = observation.progress
+        surveyIsStable = observation.isStable
+
+        if let checkpoint = observation.newlyCompletedCheckpoint {
+            submitCommand?(.inspectSurveyCheckpoint(checkpoint))
+        }
+    }
+
+    private func resetSurveyProgress(keepReference: Bool = false) {
+        if keepReference {
+            surveyEngine.interruptDwell()
+        } else {
+            surveyEngine.reset()
+        }
+        surveyCurrentCheckpoint = nil
+        surveyProgress = 0
+        surveyIsStable = false
     }
 
     func simulatorVerify(_ assessment: Assessment, casualtyID: String) {
