@@ -1260,15 +1260,12 @@ enum SpatialAssessmentCatalog {
     }
 
     static func localOffset(for assessment: Assessment) -> SpatialVector3 {
-        guard let originTarget = target(casualtyID: "casualty-b", assessment: assessment),
-              let base = casualtyPositions["casualty-b"] else {
-            return SpatialVector3(x: 0, y: 0.4, z: 0)
+        switch assessment {
+        case .response: SpatialVector3(x: -0.42, y: 0.44, z: 0)
+        case .breathing: SpatialVector3(x: 0, y: 0.48, z: 0)
+        case .perfusion: SpatialVector3(x: 0.38, y: 0.36, z: 0.14)
+        case .injuries: SpatialVector3(x: 0.62, y: 0.3, z: -0.08)
         }
-        return SpatialVector3(
-            x: originTarget.centre.x - base.x,
-            y: originTarget.centre.y - base.y,
-            z: originTarget.centre.z - base.z
-        )
     }
 }
 

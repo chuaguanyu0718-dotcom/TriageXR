@@ -717,6 +717,11 @@ final class TrainingSession: ObservableObject {
         conditionAlert = "Approach the spill perimeter before placing a safety cone. Keep clear of the visible fuel surface."
     }
 
+    func reportAssessmentOutOfReach(casualtyID: String) {
+        guard let casualty = casualties.first(where: { $0.id == casualtyID }) else { return }
+        conditionAlert = "Move within arm's reach of \(casualty.name), then gaze at and pinch the assessment marker again."
+    }
+
     func replenishInventory() {
         guard phase == .active else { return }
         inventory = Self.defaultInventory
@@ -2347,7 +2352,10 @@ struct ImmersiveTriageView: View {
                             collaboration.submit(.identifyHazard)
                         }
                     } else {
-                        verifySimulatorAssessmentTarget(named: name)
+                        verifyAssessmentTarget(
+                            named: name,
+                            worldPosition: value.entity.position(relativeTo: nil)
+                        )
                     }
                 }
         )
@@ -2436,13 +2444,41 @@ struct ImmersiveTriageView: View {
         }
     }
 
-    private func verifySimulatorAssessmentTarget(named entityName: String) {
-        guard spatialAssessment.status == .simulator else { return }
+    private func verifyAssessmentTarget(
+        named entityName: String,
+        worldPosition: SIMD3<Float>
+    ) {
         for assessment in Assessment.allCases {
             let prefix = "assessment-target-\(assessment.code)-"
             guard entityName.hasPrefix(prefix) else { continue }
             let casualtyID = String(entityName.dropFirst(prefix.count))
-            spatialAssessment.simulatorVerify(assessment, casualtyID: casualtyID)
+            guard session.selectedCasualtyID == casualtyID,
+                  let casualty = session.casualties.first(where: { $0.id == casualtyID }),
+                  !casualty.completedAssessments.contains(assessment) else {
+                return
+            }
+            guard spatialAssessment.isWithinTreatmentReach(
+                of: worldPosition,
+                maximumDistance: 1.35
+            ) else {
+                session.reportAssessmentOutOfReach(casualtyID: casualtyID)
+                return
+            }
+            let source: AssessmentEvidenceSource = spatialAssessment.status == .simulator
+                ? .simulatorSpatialTarget
+                : .handTracking
+            collaboration.submit(
+                .performAssessment(
+                    casualtyID,
+                    assessment,
+                    AssessmentEvidence(
+                        source: source,
+                        sustainedDuration: 0.2,
+                        proximityMetres: 0,
+                        gesture: "gazed at and pinched the \(assessment.code) assessment marker"
+                    )
+                )
+            )
             return
         }
     }
@@ -2488,30 +2524,24 @@ struct ImmersiveTriageView: View {
                 session.appliedEquipment[casualty.id, default: []].contains(.bandage)
             root.findEntity(named: "equipment-defibrillator-\(casualty.id)")?.isEnabled =
                 session.appliedEquipment[casualty.id, default: []].contains(.defibrillator)
-            let nextAssessment = Assessment.allCases.first {
-                !casualty.completedAssessments.contains($0)
-            }
             for assessment in Assessment.allCases {
                 guard let target = root.findEntity(
                     named: "assessment-target-\(assessment.code)-\(casualty.id)"
                 ) as? ModelEntity else {
                     continue
                 }
-                let isActive = spatialAssessment.status == .simulator
-                    && session.selectedCasualtyID == casualty.id
-                    && nextAssessment == assessment
-                target.isEnabled = isActive
+                let isSelected = session.selectedCasualtyID == casualty.id
+                let isComplete = casualty.completedAssessments.contains(assessment)
+                target.isEnabled = isSelected
                 target.model?.materials = [
                     SimpleMaterial(
-                        color: uiAssessmentColour(assessment),
+                        color: isComplete ? .systemGreen : uiAssessmentColour(assessment),
                         roughness: 0.25,
                         isMetallic: false
                     )
                 ]
-                let progressScale = isActive && spatialAssessment.activeAssessment == assessment
-                    ? Float(1 + (spatialAssessment.progress * 0.3))
-                    : 1
-                target.scale = [progressScale, progressScale, progressScale]
+                let markerScale: Float = isComplete ? 0.78 : 1
+                target.scale = [markerScale, markerScale, markerScale]
             }
         }
     }
@@ -2905,7 +2935,7 @@ struct ImmersiveTriageView: View {
 
         for assessment in Assessment.allCases {
             let marker = ModelEntity(
-                mesh: .generateSphere(radius: 0.105),
+                mesh: .generateSphere(radius: 0.095),
                 materials: [
                     SimpleMaterial(
                         color: uiAssessmentColour(assessment),
@@ -2919,7 +2949,7 @@ struct ImmersiveTriageView: View {
             marker.position = [offset.x, offset.y, offset.z]
             marker.components.set(InputTargetComponent())
             marker.components.set(
-                CollisionComponent(shapes: [.generateSphere(radius: 0.16)])
+                CollisionComponent(shapes: [.generateSphere(radius: 0.15)])
             )
             marker.components.set(HoverEffectComponent())
             marker.isEnabled = false
@@ -3378,8 +3408,8 @@ struct SpatialControlPanel: View {
                 }
             }
         }
-        .padding(20)
-        .frame(width: session.selectedCasualtyID == nil ? 540 : 620)
+        .padding(session.selectedCasualtyID == nil ? 20 : 26)
+        .frame(width: session.selectedCasualtyID == nil ? 540 : 760)
         .glassBackgroundEffect(in: RoundedRectangle(cornerRadius: 28))
     }
 
@@ -3400,24 +3430,24 @@ struct SpatialAssessmentGuideView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Label(spatialAssessment.status.title, systemImage: statusIcon)
-                    .font(.headline)
-                    .foregroundStyle(statusColour)
+                Label("Casualty assessment markers", systemImage: "scope")
+                    .font(.title3.bold())
+                    .foregroundStyle(.blue)
                 Spacer()
                 Text("\(casualty.completedAssessments.count)/\(Assessment.allCases.count) verified")
                     .font(.caption.bold())
                     .foregroundStyle(.secondary)
             }
 
-            Text(spatialAssessment.status.detail)
-                .font(.caption)
+            Text("Move close to the casualty. Look at a coloured marker and pinch to reveal that finding. Complete all four markers before assigning triage priority.")
+                .font(.subheadline)
                 .foregroundStyle(.secondary)
 
             if case .unavailable = spatialAssessment.status {
                 Button {
                     spatialAssessment.start()
                 } label: {
-                    Label("Retry hand tracking", systemImage: "arrow.clockwise")
+                    Label("Retry spatial tracking", systemImage: "arrow.clockwise")
                 }
                 .buttonStyle(.bordered)
             }
@@ -3428,27 +3458,15 @@ struct SpatialAssessmentGuideView: View {
                         Label(nextAssessment.rawValue, systemImage: nextAssessment.icon)
                             .font(.headline)
                         Spacer()
-                        Text("NEXT")
+                        Text("SUGGESTED NEXT")
                             .font(.caption2.bold())
                             .foregroundStyle(.white)
                             .padding(.horizontal, 8)
                             .padding(.vertical, 4)
                             .background(.blue, in: Capsule())
                     }
-                    Text(nextAssessment.spatialInstruction)
-                        .font(.caption)
-                    ProgressView(
-                        value: spatialAssessment.activeAssessment == nextAssessment
-                            ? spatialAssessment.progress
-                            : 0
-                    )
-                    .tint(.blue)
-                    if let proximity = spatialAssessment.proximityMetres,
-                       spatialAssessment.activeAssessment == nextAssessment {
-                        Text("Tracked hand is \(String(format: "%.2f", proximity)) m from the assessment area")
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                    }
+                    Text("Find the \(nextAssessment.markerColourName) marker over the \(nextAssessment.markerLocation), then gaze and pinch.")
+                        .font(.subheadline)
                 }
                 .padding(12)
                 .background(.blue.opacity(0.1), in: RoundedRectangle(cornerRadius: 14))
@@ -3461,12 +3479,8 @@ struct SpatialAssessmentGuideView: View {
             ) {
                 ForEach(Assessment.allCases) { assessment in
                     HStack(alignment: .top, spacing: 10) {
-                        Image(
-                            systemName: casualty.completedAssessments.contains(assessment)
-                                ? "checkmark.seal.fill"
-                                : "circle.dashed"
-                        )
-                        .foregroundStyle(casualty.completedAssessments.contains(assessment) ? .green : .secondary)
+                        Image(systemName: casualty.completedAssessments.contains(assessment) ? "checkmark.seal.fill" : "scope")
+                            .foregroundStyle(casualty.completedAssessments.contains(assessment) ? .green : assessment.markerColour)
                         VStack(alignment: .leading, spacing: 2) {
                             Text(assessment.rawValue)
                                 .font(.subheadline.bold())
@@ -3475,7 +3489,7 @@ struct SpatialAssessmentGuideView: View {
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
                             } else {
-                                Text("Awaiting verified spatial evidence")
+                                Text("\(assessment.markerColourName.capitalized) marker • \(assessment.markerLocation)")
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
                             }
@@ -3491,23 +3505,33 @@ struct SpatialAssessmentGuideView: View {
         .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 16))
     }
 
-    private var statusIcon: String {
-        switch spatialAssessment.status {
-        case .tracking: "hand.raised.fingers.spread.fill"
-        case .simulator: "visionpro.fill"
-        case .unavailable: "hand.raised.slash.fill"
-        case .starting: "waveform.path"
-        case .idle: "hand.raised.fill"
+}
+
+private extension Assessment {
+    var markerColour: Color {
+        switch self {
+        case .response: .blue
+        case .breathing: .cyan
+        case .perfusion: .pink
+        case .injuries: .orange
         }
     }
 
-    private var statusColour: Color {
-        switch spatialAssessment.status {
-        case .tracking: .green
-        case .simulator: .blue
-        case .unavailable: .red
-        case .starting: .orange
-        case .idle: .secondary
+    var markerColourName: String {
+        switch self {
+        case .response: "blue"
+        case .breathing: "cyan"
+        case .perfusion: "pink"
+        case .injuries: "orange"
+        }
+    }
+
+    var markerLocation: String {
+        switch self {
+        case .response: "shoulder"
+        case .breathing: "chest"
+        case .perfusion: "wrist"
+        case .injuries: "visible injury"
         }
     }
 }

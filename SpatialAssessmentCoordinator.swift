@@ -15,7 +15,7 @@ enum HandTrackingStatus: Equatable {
         switch self {
         case .idle: "Spatial verification idle"
         case .starting: "Starting hand tracking"
-        case .tracking: "Hand tracking active"
+        case .tracking: "Spatial interaction active"
         case .simulator: "Simulator spatial targets active"
         case .unavailable: "Hand tracking unavailable"
         }
@@ -28,7 +28,7 @@ enum HandTrackingStatus: Equatable {
         case .starting:
             "Waiting for Vision Pro hand-anchor data."
         case .tracking:
-            "Clinical findings unlock after the required hand action is sustained at the correct anatomical area."
+            "Approach the selected casualty, then gaze at and pinch each anatomical assessment marker."
         case .simulator:
             "Pinch the highlighted 3D marker to provide simulated spatial evidence."
         case .unavailable(let message):
@@ -101,7 +101,10 @@ final class SpatialAssessmentCoordinator: ObservableObject {
 
                 for await update in provider.anchorUpdates {
                     guard !Task.isCancelled else { return }
-                    process(anchor: update.anchor)
+                    // The system pinch gesture is handled by RealityKit targets.
+                    // Consume updates to keep hand tracking active without running
+                    // the previous competing pose-assessment workflow.
+                    _ = update.anchor
                 }
                 guard !Task.isCancelled else { return }
                 arSession.stop()
