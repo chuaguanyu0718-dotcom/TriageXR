@@ -42,7 +42,7 @@ const reportSchema = {
   ],
 };
 
-const systemPrompt = `You are TriageXR's after-action debrief editor for a fictional mass-casualty simulation.
+const systemPrompt = `You are TriageXR's after-action debrief editor for a fictional multi-casualty coordination simulation.
 The deterministic simulator score and event log are the only source of truth.
 
 Rules:
@@ -181,9 +181,10 @@ export function extractOutputText(response) {
 
 export function validateCoachRequest(payload) {
   requirePlainObject(payload, "request");
-  if (payload.schemaVersion !== 1) throw new Error("Unsupported schemaVersion");
+  if (payload.schemaVersion !== 2) throw new Error("Unsupported schemaVersion");
   requireText(payload.sessionID, "sessionID", 80);
   requireText(payload.scenario, "scenario", 160);
+  requireText(payload.trainingMode, "trainingMode", 40);
   requireText(payload.scenarioPace, "scenarioPace", 40);
   validateScore(payload.score);
   if (!Array.isArray(payload.events) || payload.events.length < 1 || payload.events.length > MAX_EVENTS) {

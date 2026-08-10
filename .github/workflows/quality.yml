@@ -1,0 +1,42 @@
+name: TriageXR Quality
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  core-and-assets:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v5
+      - name: Validate bundled assets
+        run: python3 Scripts/validate_assets.py
+      - name: Build core domain
+        run: swift build
+      - name: Test core domain
+        run: swift test
+      - name: Build visionOS Simulator app
+        run: >-
+          xcodebuild -project TriageXR.xcodeproj -scheme TriageXR
+          -sdk xrsimulator -configuration Debug
+          CODE_SIGNING_ALLOWED=NO build
+
+  ai-relay:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: relay
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: relay/package-lock.json
+      - run: npm ci
+      - run: npm run check
+      - run: npm test

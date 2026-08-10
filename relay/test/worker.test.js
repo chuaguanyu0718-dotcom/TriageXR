@@ -12,9 +12,10 @@ const eventID = "00000000-0000-0000-0000-000000000001";
 
 function requestFixture() {
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     sessionID: "00000000-0000-0000-0000-000000000099",
-    scenario: "Roadside mass-casualty incident simulation",
+    scenario: "Roadside multi-casualty coordination simulation",
+    trainingMode: "Guided practice",
     scenarioPace: "Demo 8x",
     score: { safety: 20, assessment: 20, triage: 18, treatment: 10, communication: 12 },
     events: [
@@ -53,6 +54,12 @@ function reportFixture(reference = eventID) {
 
 test("accepts a bounded, well-formed coaching request", () => {
   assert.equal(validateCoachRequest(requestFixture()).events[0].id, eventID);
+});
+
+test("requires the product training mode in schema v2", () => {
+  const request = requestFixture();
+  delete request.trainingMode;
+  assert.throws(() => validateCoachRequest(request), /trainingMode/);
 });
 
 test("rejects unknown evidence references in a generated report", () => {
