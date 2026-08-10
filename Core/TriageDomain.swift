@@ -48,6 +48,98 @@ enum ScenarioPace: String, CaseIterable, Identifiable, Codable, Sendable {
     }
 }
 
+enum TrainingMode: String, CaseIterable, Identifiable, Codable, Sendable {
+    case guided
+    case assessed
+
+    var id: String { rawValue }
+    var title: String { self == .guided ? "Guided training" : "Assessed run" }
+}
+
+enum ResponseMilestone: String, CaseIterable, Codable, Hashable, Sendable {
+    case incidentStarted
+    case sceneSurveyed
+    case hazardIdentified
+    case firstAssessment
+    case firstTriageTag
+    case resourceRequested
+    case scenarioCompleted
+}
+
+struct ResponseTempo: Codable, Equatable, Sendable {
+    private(set) var milestoneSeconds: [ResponseMilestone: TimeInterval] = [:]
+
+    @discardableResult
+    mutating func mark(_ milestone: ResponseMilestone, at elapsed: TimeInterval) -> Bool {
+        guard milestoneSeconds[milestone] == nil else { return false }
+        milestoneSeconds[milestone] = max(0, elapsed)
+        return true
+    }
+
+    func elapsed(for milestone: ResponseMilestone) -> TimeInterval? {
+        milestoneSeconds[milestone]
+    }
+
+    var completedMilestones: Set<ResponseMilestone> {
+        Set(milestoneSeconds.keys)
+    }
+}
+
+struct TrainingRunSummary: Identifiable, Codable, Equatable, Sendable {
+    let id: UUID
+    let completedAt: Date
+    let scenarioID: String
+    let scenarioVersion: Int
+    let trainingMode: TrainingMode
+    let scenarioPace: ScenarioPace
+    let exerciseElapsedSeconds: TimeInterval
+    let score: ScoreBreakdown
+    let responseTempo: ResponseTempo
+
+    init(
+        id: UUID = UUID(),
+        completedAt: Date = Date(),
+        scenarioID: String,
+        scenarioVersion: Int,
+        trainingMode: TrainingMode,
+        scenarioPace: ScenarioPace,
+        exerciseElapsedSeconds: TimeInterval,
+        score: ScoreBreakdown,
+        responseTempo: ResponseTempo
+    ) {
+        self.id = id
+        self.completedAt = completedAt
+        self.scenarioID = scenarioID
+        self.scenarioVersion = scenarioVersion
+        self.trainingMode = trainingMode
+        self.scenarioPace = scenarioPace
+        self.exerciseElapsedSeconds = exerciseElapsedSeconds
+        self.score = score
+        self.responseTempo = responseTempo
+    }
+}
+
+struct TrainingHistoryArchive: Codable, Equatable, Sendable {
+    static let currentSchemaVersion = 1
+    static let maximumRunCount = 10
+
+    var schemaVersion = currentSchemaVersion
+    private(set) var runs: [TrainingRunSummary] = []
+
+    mutating func record(_ run: TrainingRunSummary) {
+        runs.insert(run, at: 0)
+        if runs.count > Self.maximumRunCount {
+            runs.removeLast(runs.count - Self.maximumRunCount)
+        }
+    }
+
+    var personalBest: Int { runs.map(\.score.total).max() ?? 0 }
+    var averageScore: Int {
+        guard !runs.isEmpty else { return 0 }
+        return runs.reduce(0) { $0 + $1.score.total } / runs.count
+    }
+}
+
 enum SurveyCheckpoint: String, CaseIterable, Identifiable, Codable, Hashable, Sendable {
     case forward
     case leftFlank
@@ -89,6 +181,182 @@ enum SurveyCheckpoint: String, CaseIterable, Identifiable, Codable, Hashable, Se
 
     static func from(entityName: String) -> SurveyCheckpoint? {
         allCases.first { $0.entityName == entityName }
+    }
+}
+
+struct SceneSurveySample: Equatable, Sendable {
+    let timestamp: TimeInterval
+    let forward: SpatialVector3
+}
+
+struct SceneSurveyObservation: Equatable, Sendable {
+    let checkpoint: SurveyCheckpoint?
+    let progress: Double
+    let isStable: Bool
+    let newlyCompletedCheckpoint: SurveyCheckpoint?
+    let newlyCoveredBins: Set<Int>
+}
+
+enum SurveyCoverage {
+    static let binCount = 12
+    static let allBins = Set(0..<binCount)
+
+    static func bins(around center: Int) -> Set<Int> {
+        Set([-1, 0, 1].map { positiveModulo(center + $0, binCount) })
+    }
+
+    static func completedCheckpoints(for coveredBins: Set<Int>) -> Set<SurveyCheckpoint> {
+        var completed: Set<SurveyCheckpoint> = []
+        let centers: [(SurveyCheckpoint, Int)] = [
+            (.forward, 0),
+            (.rightFlank, 3),
+            (.rear, 6),
+            (.leftFlank, 9)
+        ]
+        for (checkpoint, center) in centers where bins(around: center).isSubset(of: coveredBins) {
+            completed.insert(checkpoint)
+        }
+        return completed
+    }
+
+    static func fractionCovered(_ coveredBins: Set<Int>) -> Double {
+        Double(coveredBins.intersection(allBins).count) / Double(binCount)
+    }
+
+    fileprivate static func positiveModulo(_ value: Int, _ divisor: Int) -> Int {
+        let remainder = value % divisor
+        return remainder >= 0 ? remainder : remainder + divisor
+    }
+}
+
+/// Converts deliberate, stable head direction into scene-survey evidence. The first
+/// valid heading becomes the trainee's forward direction, so the exercise works no
+/// matter which way the immersive space opens.
+struct SceneSurveyEngine: Sendable {
+    private static let dwellDuration: TimeInterval = 0.8
+    private static let movementThreshold: Float = 20 * .pi / 180
+    private static let minimumHorizontalMagnitude: Float = 0.45
+
+    private var referenceYaw: Float?
+    private var previousYaw: Float?
+    private var stableSince: TimeInterval?
+    private var locallyCompleted: Set<SurveyCheckpoint> = []
+    private var hostCompleted: Set<SurveyCheckpoint> = []
+    private var locallyCoveredBins: Set<Int> = []
+
+    mutating func synchronizeCompleted(_ completed: Set<SurveyCheckpoint>) {
+        hostCompleted = completed
+    }
+
+    mutating func observe(sample: SceneSurveySample) -> SceneSurveyObservation {
+        guard let yaw = validYaw(for: sample.forward) else {
+            previousYaw = nil
+            stableSince = nil
+            return SceneSurveyObservation(
+                checkpoint: nil,
+                progress: 0,
+                isStable: false,
+                newlyCompletedCheckpoint: nil,
+                newlyCoveredBins: []
+            )
+        }
+
+        if referenceYaw == nil {
+            referenceYaw = yaw
+        }
+        let relativeYaw = normalizedAngle(yaw - (referenceYaw ?? yaw))
+        let checkpoint = checkpoint(for: relativeYaw)
+
+        let isStable: Bool
+        if let previousYaw {
+            let movement = abs(normalizedAngle(yaw - previousYaw))
+            if movement > Self.movementThreshold {
+                // Begin timing at the new heading, but do not call the turning
+                // sample stable. A later sample must confirm that it settled.
+                stableSince = sample.timestamp
+                isStable = false
+            } else {
+                if stableSince == nil {
+                    stableSince = sample.timestamp
+                }
+                isStable = true
+            }
+        } else {
+            stableSince = sample.timestamp
+            isStable = true
+        }
+        previousYaw = yaw
+
+        let completed = locallyCompleted.union(hostCompleted)
+        if completed.contains(checkpoint) {
+            return SceneSurveyObservation(
+                checkpoint: checkpoint,
+                progress: 1,
+                isStable: isStable,
+                newlyCompletedCheckpoint: nil,
+                newlyCoveredBins: []
+            )
+        }
+
+        guard isStable, let stableSince else {
+            return SceneSurveyObservation(
+                checkpoint: checkpoint,
+                progress: 0,
+                isStable: isStable,
+                newlyCompletedCheckpoint: nil,
+                newlyCoveredBins: []
+            )
+        }
+
+        let progress = min(1, max(0, (sample.timestamp - stableSince) / Self.dwellDuration))
+        guard progress >= 1 else {
+            return SceneSurveyObservation(
+                checkpoint: checkpoint,
+                progress: 0,
+                isStable: true,
+                newlyCompletedCheckpoint: nil,
+                newlyCoveredBins: []
+            )
+        }
+
+        locallyCompleted.insert(checkpoint)
+        let centerBin = coverageBin(for: relativeYaw)
+        let evidence = SurveyCoverage.bins(around: centerBin)
+        let newBins = evidence.subtracting(locallyCoveredBins)
+        locallyCoveredBins.formUnion(evidence)
+        return SceneSurveyObservation(
+            checkpoint: checkpoint,
+            progress: 1,
+            isStable: true,
+            newlyCompletedCheckpoint: checkpoint,
+            newlyCoveredBins: newBins
+        )
+    }
+
+    private func validYaw(for forward: SpatialVector3) -> Float? {
+        let horizontal = hypot(forward.x, forward.z)
+        guard horizontal >= Self.minimumHorizontalMagnitude else { return nil }
+        return atan2(forward.x, -forward.z)
+    }
+
+    private func checkpoint(for yaw: Float) -> SurveyCheckpoint {
+        let quarterTurn = Float.pi / 4
+        if yaw >= -quarterTurn, yaw < quarterTurn { return .forward }
+        if yaw >= quarterTurn, yaw < 3 * quarterTurn { return .rightFlank }
+        if yaw >= -3 * quarterTurn, yaw < -quarterTurn { return .leftFlank }
+        return .rear
+    }
+
+    private func coverageBin(for yaw: Float) -> Int {
+        let raw = Int(round(yaw / (2 * .pi) * Float(SurveyCoverage.binCount)))
+        return SurveyCoverage.positiveModulo(raw, SurveyCoverage.binCount)
+    }
+
+    private func normalizedAngle(_ angle: Float) -> Float {
+        var result = angle
+        while result > .pi { result -= 2 * .pi }
+        while result <= -.pi { result += 2 * .pi }
+        return result
     }
 }
 
@@ -559,6 +827,7 @@ struct AICoachRequest: Codable, Equatable, Sendable {
     let schemaVersion: Int
     let sessionID: String
     let scenario: String
+    let trainingMode: String
     let scenarioPace: String
     let score: ScoreBreakdown
     let events: [AICoachEventPayload]
@@ -566,6 +835,7 @@ struct AICoachRequest: Codable, Equatable, Sendable {
     init(
         sessionID: UUID = UUID(),
         scenario: String = Self.scenarioName,
+        trainingMode: TrainingMode = .guided,
         scenarioPace: ScenarioPace,
         score: ScoreBreakdown,
         evidence: [DecisionEvidence]
@@ -573,6 +843,7 @@ struct AICoachRequest: Codable, Equatable, Sendable {
         schemaVersion = Self.currentSchemaVersion
         self.sessionID = sessionID.uuidString.lowercased()
         self.scenario = scenario
+        self.trainingMode = trainingMode.title
         self.scenarioPace = scenarioPace.title
         self.score = score
         events = Self.boundedEvents(evidence).map(AICoachEventPayload.init)
