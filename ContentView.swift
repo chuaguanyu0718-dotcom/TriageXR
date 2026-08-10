@@ -2050,44 +2050,64 @@ struct ResponseTempoView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
 
-                LazyVGrid(
-                    columns: [GridItem(.flexible()), GridItem(.flexible())],
-                    alignment: .leading,
-                    spacing: 10
-                ) {
-                    ForEach(displayedMilestones) { milestone in
-                        HStack(spacing: 12) {
-                            Image(systemName: icon(for: milestone))
-                                .foregroundStyle(tempo.elapsed(for: milestone) == nil ? .secondary : colour(for: milestone))
-                                .frame(width: 24)
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(milestone.title)
-                                    .font(.subheadline.bold())
-                                Text(formattedTime(for: milestone))
-                                    .font(.caption.monospacedDigit())
-                                    .foregroundStyle(.secondary)
-                            }
-                            Spacer()
-                            Image(systemName: tempo.elapsed(for: milestone) == nil ? "minus.circle" : "checkmark.circle.fill")
-                                .foregroundStyle(tempo.elapsed(for: milestone) == nil ? .secondary : .green)
-                        }
-                        .padding(10)
-                        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12))
-                        .accessibilityElement(children: .combine)
-                    }
-                }
+                milestoneGrid
             }
             .padding(.vertical, 8)
         }
     }
 
-    private func formattedTime(for milestone: ResponseMilestone) -> String {
-        guard let elapsed = tempo.elapsed(for: milestone) else { return "Not captured" }
+    private var milestoneGrid: some View {
+        LazyVGrid(
+            columns: [GridItem(.flexible()), GridItem(.flexible())],
+            alignment: .leading,
+            spacing: 10
+        ) {
+            ForEach(displayedMilestones) { milestone in
+                ResponseTempoMilestoneView(
+                    milestone: milestone,
+                    elapsed: tempo.elapsed(for: milestone)
+                )
+            }
+        }
+    }
+}
+
+private struct ResponseTempoMilestoneView: View {
+    let milestone: ResponseMilestone
+    let elapsed: TimeInterval?
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: icon)
+                .foregroundStyle(elapsed == nil ? Color.secondary : colour)
+                .frame(width: 24)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(milestone.title)
+                    .font(.subheadline.bold())
+                Text(formattedTime)
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+            Image(systemName: statusIcon)
+                .foregroundStyle(elapsed == nil ? Color.secondary : Color.green)
+        }
+        .padding(10)
+        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12))
+        .accessibilityElement(children: .combine)
+    }
+
+    private var formattedTime: String {
+        guard let elapsed else { return "Not captured" }
         let seconds = max(0, Int(elapsed.rounded()))
         return String(format: "%02d:%02d exercise time", seconds / 60, seconds % 60)
     }
 
-    private func icon(for milestone: ResponseMilestone) -> String {
+    private var statusIcon: String {
+        elapsed == nil ? "minus.circle" : "checkmark.circle.fill"
+    }
+
+    private var icon: String {
         switch milestone {
         case .incidentStarted: "play.circle.fill"
         case .sceneSurveyed: "view.360"
@@ -2103,7 +2123,7 @@ struct ResponseTempoView: View {
         }
     }
 
-    private func colour(for milestone: ResponseMilestone) -> Color {
+    private var colour: Color {
         switch milestone {
         case .hazardIdentified, .hazardCommunicated: .orange
         case .cprStarted: .red
