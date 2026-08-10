@@ -310,6 +310,22 @@ struct Casualty: Identifiable, Codable, Equatable, Sendable {
     }
 }
 
+enum InventoryTool: String, CaseIterable, Identifiable, Codable, Equatable, Hashable, Sendable {
+    case bandage
+    case safetyCone
+    case defibrillator
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .bandage: "Bandage"
+        case .safetyCone: "Hazard cone"
+        case .defibrillator: "Defibrillator"
+        }
+    }
+}
+
 struct SessionEvent: Identifiable, Codable, Equatable, Sendable {
     let id: UUID
     let elapsed: TimeInterval
@@ -705,6 +721,9 @@ struct SharedIncidentSnapshot: Codable, Equatable, Sendable {
     let decisionEvidence: [DecisionEvidence]
     let elapsed: TimeInterval
     let conditionAlert: String?
+    let inventory: [InventoryTool: Int]
+    let appliedEquipment: [String: Set<InventoryTool>]
+    let placedSafetyConeCount: Int
 
     var sceneSurveyed: Bool {
         SurveyCheckpoint.required.isSubset(of: surveyedCheckpoints)
@@ -735,6 +754,8 @@ enum IncidentCommand: Codable, Sendable {
     case assignPriority(String, TriagePriority)
     case beginCPR(String)
     case endCPR(String, String)
+    case useEquipment(InventoryTool, String?)
+    case replenishInventory
 
     var isLocalNavigation: Bool {
         switch self {
@@ -753,9 +774,11 @@ enum IncidentCommand: Codable, Sendable {
              .beginCPR(let casualtyID),
              .endCPR(let casualtyID, _):
             casualtyID
+        case .useEquipment(_, let casualtyID):
+            casualtyID
         case .begin, .end, .reset, .setScenarioPace, .inspectSurveyCheckpoint,
              .identifyHazard, .communicateHazard, .requestResources,
-             .closeCasualty:
+             .closeCasualty, .replenishInventory:
             nil
         }
     }
@@ -790,6 +813,10 @@ enum IncidentCommand: Codable, Sendable {
             "begin CPR"
         case .endCPR:
             "end CPR"
+        case .useEquipment(let tool, _):
+            "use \(tool.title.lowercased())"
+        case .replenishInventory:
+            "replenish training equipment"
         }
     }
 
@@ -804,7 +831,7 @@ enum IncidentCommand: Codable, Sendable {
             return role == .airwayResponder
         case .performAssessment:
             return role == .triageOfficer || role == .airwayResponder
-        case .selectCasualty, .closeCasualty:
+        case .selectCasualty, .closeCasualty, .useEquipment, .replenishInventory:
             return true
         }
     }
@@ -819,7 +846,7 @@ enum IncidentCommand: Codable, Sendable {
             "CPR belongs to the Airway Responder."
         case .performAssessment:
             "Assessment belongs to the Triage Officer or Airway Responder."
-        case .selectCasualty, .closeCasualty:
+        case .selectCasualty, .closeCasualty, .useEquipment, .replenishInventory:
             "This action is available to every role."
         }
     }

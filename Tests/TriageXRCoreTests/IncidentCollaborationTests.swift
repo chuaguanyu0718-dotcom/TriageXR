@@ -38,7 +38,9 @@ struct IncidentCollaborationTests {
             .performAssessment("casualty-a", .response, evidence),
             .assignPriority("casualty-a", .p1),
             .beginCPR("casualty-b"),
-            .endCPR("casualty-b", "test")
+            .endCPR("casualty-b", "test"),
+            .useEquipment(.bandage, "casualty-a"),
+            .replenishInventory
         ]
 
         for command in commands {
@@ -55,7 +57,8 @@ struct IncidentCollaborationTests {
             .performAssessment("casualty-b", .breathing, evidence),
             .assignPriority("casualty-b", .p1),
             .beginCPR("casualty-b"),
-            .endCPR("casualty-b", "test")
+            .endCPR("casualty-b", "test"),
+            .useEquipment(.defibrillator, "casualty-b")
         ]
 
         for command in commands {
@@ -64,6 +67,7 @@ struct IncidentCollaborationTests {
         #expect(IncidentCommand.selectCasualty("casualty-b").isLocalNavigation)
         #expect(IncidentCommand.closeCasualty.isLocalNavigation)
         #expect(!IncidentCommand.beginCPR("casualty-b").isLocalNavigation)
+        #expect(IncidentCommand.useEquipment(.safetyCone, nil).targetCasualtyID == nil)
     }
 
     @Test
@@ -111,7 +115,9 @@ struct IncidentCollaborationTests {
             .performAssessment("casualty-a", .response, evidence),
             .assignPriority("casualty-a", .p1),
             .beginCPR("casualty-b"),
-            .endCPR("casualty-b", "test")
+            .endCPR("casualty-b", "test"),
+            .useEquipment(.defibrillator, "casualty-b"),
+            .replenishInventory
         ]
 
         for command in commands {
@@ -191,7 +197,10 @@ struct IncidentCollaborationTests {
             events: [],
             decisionEvidence: [evidence, systemEvidence],
             elapsed: 12,
-            conditionAlert: nil
+            conditionAlert: nil,
+            inventory: [.bandage: 4, .safetyCone: 4, .defibrillator: 1],
+            appliedEquipment: [:],
+            placedSafetyConeCount: 0
         )
 
         let encoded = try JSONEncoder().encode(IncidentMessage.snapshot(snapshot))
@@ -210,6 +219,7 @@ struct IncidentCollaborationTests {
         #expect(decodedSnapshot.decisionEvidence.last?.actorRole == nil)
         #expect(decodedSnapshot.decisionEvidence.last?.outcome == .scenarioUpdate)
         #expect(decodedSnapshot.decisionEvidence.last?.recommendedAction == "Reassess immediately.")
+        #expect(decodedSnapshot.inventory[.bandage] == 4)
     }
 
     @Test

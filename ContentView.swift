@@ -92,6 +92,9 @@ final class TrainingSession: ObservableObject {
     @Published var decisionEvidence: [DecisionEvidence] = []
     @Published var elapsed: TimeInterval = 0
     @Published var conditionAlert: String? = nil
+    @Published var inventory: [InventoryTool: Int] = TrainingSession.defaultInventory
+    @Published var appliedEquipment: [String: Set<InventoryTool>] = [:]
+    @Published var placedSafetyConeCount = 0
     @Published private(set) var revision = 0
 
     private var lastTickAt: Date?
@@ -99,6 +102,12 @@ final class TrainingSession: ObservableObject {
     private let voice = AVSpeechSynthesizer()
     private var currentActorRole: ResponderRole = .incidentCommander
     var didChange: ((SharedIncidentSnapshot) -> Void)?
+
+    static let defaultInventory: [InventoryTool: Int] = [
+        .bandage: 4,
+        .safetyCone: 4,
+        .defibrillator: 1
+    ]
 
     var selectedCasualty: Casualty? {
         guard let id = selectedCasualtyID else { return nil }
@@ -123,7 +132,7 @@ final class TrainingSession: ObservableObject {
         if !sceneSurveyed {
             return RecommendedAction(
                 title: "Survey the scene",
-                detail: "Look around and pinch each blue sector beacon (\(surveyedCheckpoints.count)/\(SurveyCheckpoint.required.count)).",
+                detail: "Turn naturally through the front, left, rear, and right sectors (\(surveyedCheckpoints.count)/\(SurveyCheckpoint.required.count)).",
                 icon: "view.360",
                 colour: .orange
             )
@@ -237,6 +246,10 @@ final class TrainingSession: ObservableObject {
             beginCPR(for: casualtyID)
         case .endCPR(let casualtyID, let reason):
             endCPR(for: casualtyID, reason: reason)
+        case .useEquipment(let tool, let casualtyID):
+            useEquipment(tool, casualtyID: casualtyID)
+        case .replenishInventory:
+            replenishInventory()
         }
     }
 
@@ -277,7 +290,10 @@ final class TrainingSession: ObservableObject {
             events: events,
             decisionEvidence: decisionEvidence,
             elapsed: elapsed,
-            conditionAlert: conditionAlert
+            conditionAlert: conditionAlert,
+            inventory: inventory,
+            appliedEquipment: appliedEquipment,
+            placedSafetyConeCount: placedSafetyConeCount
         )
     }
 
@@ -301,6 +317,9 @@ final class TrainingSession: ObservableObject {
         decisionEvidence = snapshot.decisionEvidence
         elapsed = snapshot.elapsed
         conditionAlert = snapshot.conditionAlert
+        inventory = snapshot.inventory
+        appliedEquipment = snapshot.appliedEquipment
+        placedSafetyConeCount = snapshot.placedSafetyConeCount
         lastTickAt = nil
     }
 
@@ -316,6 +335,9 @@ final class TrainingSession: ObservableObject {
         decisionEvidence = []
         elapsed = 0
         conditionAlert = nil
+        inventory = Self.defaultInventory
+        appliedEquipment = [:]
+        placedSafetyConeCount = 0
         phase = .active
         lastTickAt = Date()
         record(
@@ -616,6 +638,72 @@ final class TrainingSession: ObservableObject {
                 ? nil
                 : "Re-establish the compression hold and maintain it continuously for at least \(Int(ScenarioRules.minimumDemonstrationCPRDuration)) real seconds.",
             replayFocusCasualtyID: casualtyID
+        )
+    }
+
+    func useEquipment(_ tool: InventoryTool, casualtyID: String?) {
+        guard phase == .active, inventory[tool, default: 0] > 0 else {
+            conditionAlert = "No \(tool.title.lowercased()) units are available."
+            return
+        }
+
+        if tool == .safetyCone {
+            guard placedSafetyConeCount < Self.defaultInventory[.safetyCone, default: 4] else {
+                conditionAlert = "The hazard perimeter already has all available cones."
+                return
+            }
+            inventory[tool, default: 0] -= 1
+            placedSafetyConeCount += 1
+            hazardIdentified = true
+            conditionAlert = "Hazard cone placed (\(placedSafetyConeCount)/4)."
+            record(
+                "Equipment",
+                "Placed a safety cone around the fuel hazard.",
+                positive: true,
+                outcome: "Hazard perimeter expanded",
+                cues: ["Fuel spill visible", "\(inventory[tool, default: 0]) cones remaining"],
+                consequence: "The exclusion zone became more visible to the response team."
+            )
+            return
+        }
+
+        guard let casualtyID,
+              let casualty = casualties.first(where: { $0.id == casualtyID }) else {
+            conditionAlert = "Select a casualty before applying \(tool.title.lowercased())."
+            return
+        }
+        guard appliedEquipment[casualtyID, default: []].contains(tool) == false else {
+            conditionAlert = "\(casualty.name) already has a \(tool.title.lowercased()) applied."
+            return
+        }
+
+        inventory[tool, default: 0] -= 1
+        appliedEquipment[casualtyID, default: []].insert(tool)
+        let appropriate = tool != .defibrillator || casualty.deteriorationProfile.requiresCPR
+        conditionAlert = "\(tool.title) applied to \(casualty.name)."
+        record(
+            "Equipment",
+            "Applied \(tool.title.lowercased()) to \(casualty.name).",
+            positive: appropriate,
+            outcome: appropriate ? "Equipment applied" : "Clinical indication needs review",
+            cues: [casualty.conditionLabel, "\(inventory[tool, default: 0]) remaining"],
+            consequence: appropriate
+                ? "The equipment is now visible on the casualty and recorded in inventory."
+                : "The equipment was consumed, but the casualty did not show the simulated indication.",
+            replayFocusCasualtyID: casualtyID
+        )
+    }
+
+    func replenishInventory() {
+        guard phase == .active else { return }
+        inventory = Self.defaultInventory
+        conditionAlert = "Training inventory replenished."
+        record(
+            "Equipment",
+            "Replenished the equipment toolbar.",
+            positive: true,
+            outcome: "Inventory restored",
+            consequence: "All training equipment quantities returned to their starting levels."
         )
     }
 
@@ -1274,6 +1362,8 @@ struct BriefingRow: View {
 
 struct SurveyProgressView: View {
     let completed: Set<SurveyCheckpoint>
+    let simulatorMode: Bool
+    let inspectAction: (SurveyCheckpoint) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -1289,24 +1379,26 @@ struct SurveyProgressView: View {
             HStack(spacing: 8) {
                 ForEach(SurveyCheckpoint.allCases) { checkpoint in
                     let isComplete = completed.contains(checkpoint)
-                    Label(
-                        checkpoint.shortTitle,
-                        systemImage: isComplete ? "checkmark.circle.fill" : "circle.dashed"
-                    )
-                    .font(.caption.bold())
-                    .foregroundStyle(isComplete ? .green : .cyan)
-                    .frame(maxWidth: .infinity)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 7)
-                    .background(
-                        (isComplete ? Color.green : Color.cyan).opacity(0.1),
-                        in: Capsule()
-                    )
+                    Button { inspectAction(checkpoint) } label: {
+                        Label(
+                            checkpoint.shortTitle,
+                            systemImage: isComplete ? "checkmark.circle.fill" : "circle.dashed"
+                        )
+                        .font(.caption.bold())
+                        .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(isComplete ? .green : .cyan)
+                    .disabled(isComplete || !simulatorMode)
                 }
             }
 
             if !SurveyCheckpoint.required.isSubset(of: completed) {
-                Text("Turn through the full scene and pinch each blue beacon before approaching casualties.")
+                Text(
+                    simulatorMode
+                        ? "Simulator: use these compact sector controls to test survey completion."
+                        : "Turn naturally through the full scene. Headset direction is recorded automatically."
+                )
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -2081,6 +2173,7 @@ struct ImmersiveTriageView: View {
     @Environment(\.openWindow) private var openWindow
     @State private var spatialCPRIsHeld = false
     @State private var isClosingForDebrief = false
+    @State private var selectedInventoryTool: InventoryTool?
 
     var body: some View {
         RealityView { content, attachments in
@@ -2089,11 +2182,19 @@ struct ImmersiveTriageView: View {
                 controls.position = controlPosition
                 content.add(controls)
             }
+            if let inventory = attachments.entity(for: "inventory") {
+                inventory.position = [-1.02, 0.38, -1.15]
+                content.add(inventory)
+            }
         } update: { content, attachments in
             updateScene(content: content)
             if let controls = attachments.entity(for: "controls") {
                 controls.position = controlPosition
                 if controls.parent == nil { content.add(controls) }
+            }
+            if let inventory = attachments.entity(for: "inventory"), inventory.parent == nil {
+                inventory.position = [-1.02, 0.38, -1.15]
+                content.add(inventory)
             }
         } attachments: {
             Attachment(id: "controls") {
@@ -2101,18 +2202,33 @@ struct ImmersiveTriageView: View {
                     .onFinish { finishScenario() }
                     .environmentObject(session)
             }
+            Attachment(id: "inventory") {
+                InventoryToolbar(
+                    selectedTool: $selectedInventoryTool,
+                    replenishAction: { collaboration.submit(.replenishInventory) }
+                )
+                .environmentObject(session)
+            }
         }
         .gesture(
             TapGesture()
                 .targetedToAnyEntity()
                 .onEnded { value in
                     let name = value.entity.name
-                    if let checkpoint = SurveyCheckpoint.from(entityName: name) {
-                        collaboration.submit(.inspectSurveyCheckpoint(checkpoint))
-                    } else if name.hasPrefix("casualty-") {
-                        collaboration.submit(.selectCasualty(name))
+                    if name.hasPrefix("casualty-") {
+                        if let tool = selectedInventoryTool, tool != .safetyCone {
+                            collaboration.submit(.useEquipment(tool, name))
+                            selectedInventoryTool = nil
+                        } else {
+                            collaboration.submit(.selectCasualty(name))
+                        }
                     } else if name == "fuel-hazard" {
-                        collaboration.submit(.identifyHazard)
+                        if selectedInventoryTool == .safetyCone {
+                            collaboration.submit(.useEquipment(.safetyCone, nil))
+                            selectedInventoryTool = nil
+                        } else {
+                            collaboration.submit(.identifyHazard)
+                        }
                     } else {
                         verifySimulatorAssessmentTarget(named: name)
                     }
@@ -2193,25 +2309,12 @@ struct ImmersiveTriageView: View {
 
     private func updateScene(content: RealityViewContent) {
         guard let root = content.entities.first(where: { $0.name == "scene-root" }) else { return }
-        for checkpoint in SurveyCheckpoint.allCases {
-            guard let beacon = root.findEntity(named: checkpoint.entityName) as? ModelEntity else {
-                continue
-            }
-            let isInspected = session.surveyedCheckpoints.contains(checkpoint)
-            beacon.isEnabled = !session.sceneSurveyed
-            beacon.model?.materials = [
-                SimpleMaterial(
-                    color: isInspected ? .systemGreen : .systemCyan,
-                    roughness: 0.2,
-                    isMetallic: false
-                )
-            ]
-            let scale: Float = isInspected ? 0.72 : 1
-            beacon.scale = [scale, scale, scale]
-        }
         if let hazard = root.findEntity(named: "fuel-hazard") as? ModelEntity {
             hazard.model?.materials = [SimpleMaterial(color: session.hazardIdentified ? .systemRed : .systemYellow, isMetallic: false)]
             hazard.scale = session.hazardIdentified ? [1.2, 1.2, 1.2] : [1, 1, 1]
+        }
+        for index in 0..<4 {
+            root.findEntity(named: "inventory-cone-\(index)")?.isEnabled = index < session.placedSafetyConeCount
         }
         for casualty in session.casualties {
             guard let tag = root.findEntity(named: "tag-\(casualty.id)") as? ModelEntity else { continue }
@@ -2241,6 +2344,10 @@ struct ImmersiveTriageView: View {
                 let targetScale: Float = casualty.isReceivingCPR ? 1.18 : 1
                 cprTarget.scale = [targetScale, targetScale, targetScale]
             }
+            root.findEntity(named: "equipment-bandage-\(casualty.id)")?.isEnabled =
+                session.appliedEquipment[casualty.id, default: []].contains(.bandage)
+            root.findEntity(named: "equipment-defibrillator-\(casualty.id)")?.isEnabled =
+                session.appliedEquipment[casualty.id, default: []].contains(.defibrillator)
             let nextAssessment = Assessment.allCases.first {
                 !casualty.completedAssessments.contains($0)
             }
@@ -2283,7 +2390,6 @@ struct ImmersiveTriageView: View {
         }
 
         addRoadEnvironment(to: root)
-        addSurveyCheckpoints(to: root)
 
         root.addChild(await makeVehicle(position: [-2.4, -1.28, -4.2], rotation: -0.22))
         root.addChild(await makeVehicle(position: [2.0, -1.28, -4.4], rotation: 0.3))
@@ -2292,38 +2398,17 @@ struct ImmersiveTriageView: View {
         root.addChild(await makeCasualty(id: "casualty-b", assetName: "CasualtyJordan", locatorColour: .systemPurple, position: [0.1, -1.08, -3.15]))
         root.addChild(await makeCasualty(id: "casualty-c", assetName: "CasualtySam", locatorColour: .systemTeal, position: [1.55, -1.08, -2.2]))
         root.addChild(makeHazard())
-        return root
-    }
-
-    private func addSurveyCheckpoints(to root: Entity) {
-        let positions: [SurveyCheckpoint: SIMD3<Float>] = [
-            .forward: [0, 0.55, -5.3],
-            .leftFlank: [-3.7, 0.5, -1.2],
-            .rear: [0, 0.5, 2.8],
-            .rightFlank: [3.7, 0.5, -1.2]
+        let conePositions: [SIMD3<Float>] = [
+            [-2.25, -1.12, -3.15], [-1.05, -1.12, -3.15],
+            [-2.25, -1.12, -4.25], [-1.05, -1.12, -4.25]
         ]
-
-        for checkpoint in SurveyCheckpoint.allCases {
-            guard let position = positions[checkpoint] else { continue }
-            let beacon = ModelEntity(
-                mesh: .generateSphere(radius: 0.18),
-                materials: [
-                    SimpleMaterial(
-                        color: .systemCyan,
-                        roughness: 0.2,
-                        isMetallic: false
-                    )
-                ]
-            )
-            beacon.name = checkpoint.entityName
-            beacon.position = position
-            beacon.components.set(InputTargetComponent())
-            beacon.components.set(
-                CollisionComponent(shapes: [.generateSphere(radius: 0.3)])
-            )
-            beacon.components.set(HoverEffectComponent())
-            root.addChild(beacon)
+        for (index, position) in conePositions.enumerated() {
+            let cone = makeTrafficCone(position: position)
+            cone.name = "inventory-cone-\(index)"
+            cone.isEnabled = false
+            root.addChild(cone)
         }
+        return root
     }
 
     private func sceneAsset(named name: String) async -> Entity? {
@@ -2522,6 +2607,31 @@ struct ImmersiveTriageView: View {
             marker.isEnabled = false
             casualty.addChild(marker)
         }
+
+        let bandage = ModelEntity(
+            mesh: .generateCylinder(height: 0.38, radius: 0.255),
+            materials: [SimpleMaterial(color: UIColor(white: 0.94, alpha: 1), roughness: 0.9, isMetallic: false)]
+        )
+        bandage.name = "equipment-bandage-\(id)"
+        bandage.orientation = simd_quatf(angle: .pi / 2, axis: [0, 0, 1])
+        bandage.position = [0.15, 0.24, 0]
+        bandage.isEnabled = false
+        casualty.addChild(bandage)
+
+        let defibrillator = Entity()
+        defibrillator.name = "equipment-defibrillator-\(id)"
+        defibrillator.position = [0, 0.38, 0]
+        let padMaterial = SimpleMaterial(color: .systemGreen, roughness: 0.55, isMetallic: false)
+        for x: Float in [-0.16, 0.16] {
+            let pad = ModelEntity(
+                mesh: .generateBox(width: 0.18, height: 0.025, depth: 0.16, cornerRadius: 0.025),
+                materials: [padMaterial]
+            )
+            pad.position = [x, 0, 0]
+            defibrillator.addChild(pad)
+        }
+        defibrillator.isEnabled = false
+        casualty.addChild(defibrillator)
         return casualty
     }
 
@@ -2567,6 +2677,109 @@ struct ImmersiveTriageView: View {
     }
 }
 
+struct InventoryToolbar: View {
+    @EnvironmentObject private var session: TrainingSession
+    @Binding var selectedTool: InventoryTool?
+    let replenishAction: () -> Void
+    @State private var isExpanded = true
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Button {
+                withAnimation(.snappy(duration: 0.2)) { isExpanded.toggle() }
+            } label: {
+                VStack(spacing: 4) {
+                    Image(systemName: isExpanded ? "chevron.left" : "cross.case.fill")
+                        .font(.title2)
+                    Text(isExpanded ? "Hide" : "Kit")
+                        .font(.caption2.bold())
+                }
+                .frame(width: 50, height: 50)
+            }
+            .buttonStyle(.borderedProminent)
+            .accessibilityLabel(isExpanded ? "Close equipment toolbar" : "Open equipment toolbar")
+
+            if isExpanded {
+                VStack(alignment: .leading, spacing: 9) {
+                    HStack {
+                        Label("Equipment", systemImage: "cross.case.fill")
+                            .font(.headline)
+                        Spacer()
+                        Button(action: replenishAction) {
+                            Image(systemName: "arrow.clockwise")
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Replenish equipment")
+                    }
+
+                    ForEach(InventoryTool.allCases) { tool in
+                        Button {
+                            selectedTool = selectedTool == tool ? nil : tool
+                        } label: {
+                            HStack(spacing: 10) {
+                                Image(systemName: icon(for: tool))
+                                    .font(.title3)
+                                    .foregroundStyle(colour(for: tool))
+                                    .frame(width: 28)
+                                VStack(alignment: .leading, spacing: 1) {
+                                    Text(tool.title).font(.subheadline.bold())
+                                    Text(instruction(for: tool))
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                                Text("×\(session.inventory[tool, default: 0])")
+                                    .font(.headline.monospacedDigit())
+                                    .contentTransition(.numericText())
+                            }
+                            .padding(.vertical, 4)
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.bordered)
+                        .tint(selectedTool == tool ? colour(for: tool) : .secondary)
+                        .disabled(session.inventory[tool, default: 0] == 0)
+                        .accessibilityLabel("\(tool.title), \(session.inventory[tool, default: 0]) available")
+                    }
+
+                    if let selectedTool {
+                        Label("\(selectedTool.title) selected", systemImage: "hand.point.up.left.fill")
+                            .font(.caption.bold())
+                            .foregroundStyle(colour(for: selectedTool))
+                    }
+                }
+                .frame(width: 290)
+                .transition(.move(edge: .leading).combined(with: .opacity))
+            }
+        }
+        .padding(12)
+        .glassBackgroundEffect(in: RoundedRectangle(cornerRadius: 22))
+    }
+
+    private func icon(for tool: InventoryTool) -> String {
+        switch tool {
+        case .bandage: "bandage.fill"
+        case .safetyCone: "exclamationmark.triangle.fill"
+        case .defibrillator: "bolt.heart.fill"
+        }
+    }
+
+    private func colour(for tool: InventoryTool) -> Color {
+        switch tool {
+        case .bandage: .blue
+        case .safetyCone: .orange
+        case .defibrillator: .red
+        }
+    }
+
+    private func instruction(for tool: InventoryTool) -> String {
+        switch tool {
+        case .bandage: "Select, then pinch a casualty"
+        case .safetyCone: "Select, then pinch the hazard"
+        case .defibrillator: "Select, then pinch a casualty"
+        }
+    }
+}
+
 struct SpatialControlPanel: View {
     @EnvironmentObject private var session: TrainingSession
     @EnvironmentObject private var collaboration: IncidentCollaborationCoordinator
@@ -2608,7 +2821,14 @@ struct SpatialControlPanel: View {
             if session.selectedCasualty == nil {
                 NextActionCard(action: session.nextRecommendedAction, compact: true)
                 if !session.sceneSurveyed {
-                    SurveyProgressView(completed: session.surveyedCheckpoints)
+                    SurveyProgressView(
+                        completed: session.surveyedCheckpoints,
+                        simulatorMode: spatialAssessment.status == .simulator,
+                        inspectAction: { checkpoint in
+                            guard spatialAssessment.status == .simulator else { return }
+                            collaboration.submit(.inspectSurveyCheckpoint(checkpoint))
+                        }
+                    )
                 }
             }
 

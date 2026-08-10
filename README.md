@@ -33,6 +33,18 @@ The experience follows the product storyboard:
 The yellow fuel spill is interactive.
 After identifying it, use the incident panel to report it and request resources.
 
+## Equipment toolbar
+
+The collapsible **Equipment** toolbar sits in the trainee's left peripheral view and opens expanded on incident entry.
+
+- **Bandage ×4:** select Bandage, then pinch a casualty. A visible dressing attaches and the quantity decreases immediately.
+- **Hazard cone ×4:** select Hazard cone, then pinch the fuel spill. Cones appear around the exclusion zone one at a time.
+- **Defibrillator ×1:** select Defibrillator, then pinch a casualty. Training pads appear on the casualty; using it without the simulated indication is recorded for review.
+- Use the circular-arrow button to replenish the training inventory.
+- Select an active tool again to cancel it, or use **Hide** to collapse the toolbar to a small peripheral Kit control.
+
+Equipment commands and quantities are part of the authoritative incident snapshot, so SharePlay participants, visual state, and the after-action evidence timeline remain synchronized.
+
 ## Extraordinary demo features
 
 - **Evidence-based replay:** Every material action captures the acting role, visible cues, causal outcome, consequence, and a spatial incident snapshot.

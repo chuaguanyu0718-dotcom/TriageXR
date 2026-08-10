@@ -2,6 +2,7 @@ import ARKit
 import Combine
 import Foundation
 import simd
+import QuartzCore
 
 enum HandTrackingStatus: Equatable {
     case idle
@@ -52,8 +53,12 @@ final class SpatialAssessmentCoordinator: ObservableObject {
     private var submitCommand: ((IncidentCommand) -> Void)?
     private let arSession = ARKitSession()
     private let provider = HandTrackingProvider()
+    private let worldProvider = WorldTrackingProvider()
     private var engine = SpatialAssessmentEngine()
     private var trackingTask: Task<Void, Never>?
+    private var surveyTask: Task<Void, Never>?
+    private var initialSurveyYaw: Float?
+    private var observedSurveySectors: Set<SurveyCheckpoint> = []
     private var lastSubmittedKey: String?
     private var activeTargetKey: String?
     private var activeHand: HandAnchor.Chirality?
@@ -83,9 +88,10 @@ final class SpatialAssessmentCoordinator: ObservableObject {
             guard let self else { return }
             defer { trackingTask = nil }
             do {
-                try await arSession.run([provider])
+                try await arSession.run([provider, worldProvider])
                 guard !Task.isCancelled else { return }
                 status = .tracking
+                startSurveyTracking()
 
                 for await update in provider.anchorUpdates {
                     guard !Task.isCancelled else { return }
@@ -110,7 +116,9 @@ final class SpatialAssessmentCoordinator: ObservableObject {
 
     func stop() {
         trackingTask?.cancel()
+        surveyTask?.cancel()
         trackingTask = nil
+        surveyTask = nil
         arSession.stop()
         engine.reset()
         activeAssessment = nil
@@ -120,6 +128,63 @@ final class SpatialAssessmentCoordinator: ObservableObject {
         activeTargetKey = nil
         activeHand = nil
         status = .idle
+        initialSurveyYaw = nil
+        observedSurveySectors = []
+    }
+
+    private func startSurveyTracking() {
+        surveyTask?.cancel()
+        surveyTask = Task { [weak self] in
+            guard let self else { return }
+            while !Task.isCancelled {
+                observeHeadDirection()
+                try? await Task.sleep(for: .milliseconds(120))
+            }
+        }
+    }
+
+    private func observeHeadDirection() {
+        guard let trainingSession,
+              trainingSession.phase == .active,
+              !trainingSession.sceneSurveyed,
+              let anchor = worldProvider.queryDeviceAnchor(atTimestamp: CACurrentMediaTime()),
+              anchor.isTracked else { return }
+
+        let transform = anchor.originFromAnchorTransform
+        let forward = -SIMD3<Float>(
+            transform.columns.2.x,
+            transform.columns.2.y,
+            transform.columns.2.z
+        )
+        let yaw = atan2(forward.x, forward.z)
+        guard let initialSurveyYaw else {
+            self.initialSurveyYaw = yaw
+            submitSurveySector(.forward)
+            return
+        }
+
+        let delta = normalizedAngle(yaw - initialSurveyYaw)
+        let degrees = delta * 180 / .pi
+        let sector: SurveyCheckpoint
+        switch degrees {
+        case -45..<45: sector = .forward
+        case 45..<135: sector = .leftFlank
+        case -135 ..< -45: sector = .rightFlank
+        default: sector = .rear
+        }
+        submitSurveySector(sector)
+    }
+
+    private func submitSurveySector(_ sector: SurveyCheckpoint) {
+        guard observedSurveySectors.insert(sector).inserted else { return }
+        submitCommand?(.inspectSurveyCheckpoint(sector))
+    }
+
+    private func normalizedAngle(_ angle: Float) -> Float {
+        var result = angle
+        while result > .pi { result -= 2 * .pi }
+        while result < -.pi { result += 2 * .pi }
+        return result
     }
 
     func simulatorVerify(_ assessment: Assessment, casualtyID: String) {
