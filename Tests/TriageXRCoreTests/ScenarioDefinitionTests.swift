@@ -40,8 +40,11 @@ struct ScenarioDefinitionTests {
     func responseTempoPreservesOnlyTheFirstOccurrence() {
         var tempo = ResponseTempo()
 
-        #expect(tempo.mark(.firstAssessment, at: 18))
-        #expect(!tempo.mark(.firstAssessment, at: 42))
+        let recordedFirstOccurrence = tempo.mark(.firstAssessment, at: 18)
+        let recordedDuplicate = tempo.mark(.firstAssessment, at: 42)
+
+        #expect(recordedFirstOccurrence)
+        #expect(!recordedDuplicate)
         #expect(tempo.elapsed(for: .firstAssessment) == 18)
         #expect(tempo.completedMilestones == [.firstAssessment])
     }
