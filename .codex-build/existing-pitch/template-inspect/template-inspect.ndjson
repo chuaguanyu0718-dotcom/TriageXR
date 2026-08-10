@@ -1,0 +1,20 @@
+{"kind":"slide","id":"sl/y90nupkv","slide":1,"title":"TriageXR","textShapes":5}
+{"kind":"shape","id":"sh/547294r6","slide":1,"name":"Freeform 2","bbox":[0,0,1920,1080]}
+{"kind":"textbox","id":"sh/k3yl0zql","slide":1,"name":"TextBox 3","text":"TriageXR","textPreview":"TriageXR","textChars":8,"textLines":1,"bbox":[108,536.99,1396.72,284.14]}
+{"kind":"textbox","id":"sh/7qp4be9c","slide":1,"name":"TextBox 4","text":"Spatial Hack AI","textPreview":"Spatial Hack AI","textChars":15,"textLines":1,"bbox":[108,464.49,597.29,64.26]}
+{"kind":"textbox","id":"sh/65g3298r","slide":1,"name":"TextBox 5","text":"Project By :","textPreview":"Project By :","textChars":12,"textLines":1,"bbox":[108,907.62,366.41,40.87]}
+{"kind":"textbox","id":"sh/ts7md4r2","slide":1,"name":"TextBox 6","text":"Shreeraj, Guan Yu, Weishuo","textPreview":"Shreeraj, Guan Yu, Weishuo","textChars":26,"textLines":1,"bbox":[108,949.24,408.68,40.87]}
+{"kind":"textbox","id":"sh/sryl4zqx","slide":1,"name":"TextBox 7","text":"2026","textPreview":"2026","textChars":4,"textLines":1,"bbox":[1681.41,949.24,130.59,40.87]}
+{"kind":"slide","id":"sl/hwbqtkby","slide":2,"title":"Problem Statement","textShapes":2}
+{"kind":"shape","id":"sh/9072xkry","slide":2,"name":"Freeform 2","bbox":[0,0,1920,1080]}
+{"kind":"shape","id":"sh/b29kza94","slide":2,"name":"Freeform 4","bbox":[960,82.37,786.71,393.38]}
+{"kind":"textbox","id":"sh/a10jqpsj","slide":2,"name":"TextBox 5","text":"Problem Statement","textPreview":"Problem Statement","textChars":17,"textLines":1,"bbox":[108,320.05,635.85,198.2]}
+{"kind":"textbox","id":"sh/x4r21kru","slide":2,"name":"TextBox 6","text":"Brief 8: \nHow might we train first responders for a mass casualty incident with spatial computing and AI?\n","textPreview":"Brief 8:  | How might we train first responders for a mass casualty incident with spatial computing and AI? |","textChars":106,"textLines":3,"bbox":[108,551.28,635.85,147.67]}
+{"kind":"shape","id":"sh/w3i1sfa9","slide":2,"name":"TextBox 7","bbox":[1109.56,581.19,607.84,44.33]}
+{"kind":"slide","id":"sl/ofy9wn61","slide":3,"title":"Slide 3","textShapes":0}
+{"kind":"shape","id":"sh/cza94vmx","slide":3,"name":"Freeform 2","bbox":[0,0,1920,1080]}
+{"kind":"slide","id":"sl/jyx0ra1s","slide":4,"title":"Slide 4","textShapes":0}
+{"kind":"shape","id":"sh/1cj2d8b6","slide":4,"name":"Freeform 2","bbox":[0,0,1920,1080]}
+{"kind":"slide","id":"sl/i107q5of","slide":5,"title":"Big Thanks!","textShapes":1}
+{"kind":"shape","id":"sh/dgbulwnm","slide":5,"name":"Freeform 2","bbox":[0,0,1920,1080]}
+{"kind":"textbox","id":"sh/cf2tcr61","slide":5,"name":"TextBox 3","text":"Big Thanks!","textPreview":"Big Thanks!","textChars":11,"textLines":1,"bbox":[108,536.99,1396.72,284.14]}

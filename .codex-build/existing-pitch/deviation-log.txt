@@ -1,0 +1,1 @@
+Slides 3–8 use explicit bounded new-content zones because the mapped source slides are intentionally blank branded canvases. Slide 9 edits the inherited closing headline and adds one small ask beneath it. Slides 1–2 are preserved without edits.

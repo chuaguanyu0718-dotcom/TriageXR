@@ -1,0 +1,50 @@
+{"kind":"deck","id":"pr/vtnyzw","name":"Deck"}
+{"kind":"layout","layoutId":"/ppt/slideMasters/slideMaster1.xml","name":"","type":"master","placeholders":[{"name":"title","type":"title","textPreview":"Click to edit Master title style"},{"name":"body","type":"body","textPreview":"Click to edit Master text styles | Second level | Third level | Fourth level | Fifth level"},{"name":"dateTime","type":"dateTime","textPreview":"8/1/2011"},{"name":"footer","type":"footer"},{"name":"slideNumber","type":"slideNumber","textPreview":"‹#›"}]}
+{"kind":"layout","layoutId":"/ppt/slideLayouts/slideLayout1.xml","name":"Title Slide","type":"title","placeholders":[{"name":"title","type":"title","textPreview":"Click to edit Master title style"},{"name":"subtitle","type":"subtitle","textPreview":"Click to edit Master subtitle style"},{"name":"dateTime","type":"dateTime","textPreview":"8/1/2011"},{"name":"footer","type":"footer"},{"name":"slideNumber","type":"slideNumber","textPreview":"‹#›"}]}
+{"kind":"layout","layoutId":"/ppt/slideLayouts/slideLayout2.xml","name":"Title and Content","type":"obj","placeholders":[{"name":"title","type":"title","textPreview":"Click to edit Master title style"},{"name":"content placeholder 2","textPreview":"Click to edit Master text styles | Second level | Third level | Fourth level | Fifth level"},{"name":"dateTime","type":"dateTime","textPreview":"8/1/2011"},{"name":"footer","type":"footer"},{"name":"slideNumber","type":"slideNumber","textPreview":"‹#›"}]}
+{"kind":"layout","layoutId":"/ppt/slideLayouts/slideLayout3.xml","name":"Section Header","type":"secHead","placeholders":[{"name":"title","type":"title","textPreview":"Click to edit Master title style"},{"name":"body","type":"body","textPreview":"Click to edit Master text styles"},{"name":"dateTime","type":"dateTime","textPreview":"8/1/2011"},{"name":"footer","type":"footer"},{"name":"slideNumber","type":"slideNumber","textPreview":"‹#›"}]}
+{"kind":"layout","layoutId":"/ppt/slideLayouts/slideLayout4.xml","name":"Two Content","type":"twoObj","placeholders":[{"name":"title","type":"title","textPreview":"Click to edit Master title style"},{"name":"content placeholder 2","textPreview":"Click to edit Master text styles | Second level | Third level | Fourth level | Fifth level"},{"name":"content placeholder 3","textPreview":"Click to edit Master text styles | Second level | Third level | Fourth level | Fifth level"},{"name":"dateTime","type":"dateTime","textPreview":"8/1/2011"},{"name":"footer","type":"footer"},{"name":"slideNumber","type":"slideNumber","textPreview":"‹#›"}]}
+{"kind":"layout","layoutId":"/ppt/slideLayouts/slideLayout5.xml","name":"Comparison","type":"twoTxTwoObj","placeholders":[{"name":"title","type":"title","textPreview":"Click to edit Master title style"},{"name":"body","type":"body","textPreview":"Click to edit Master text styles"},{"name":"content placeholder 3","textPreview":"Click to edit Master text styles | Second level | Third level | Fourth level | Fifth level"},{"name":"body","type":"body","textPreview":"Click to edit Master text styles"},{"name":"content placeholder 5","textPreview":"Click to edit Master text styles | Second level | Third level | Fourth level | Fifth level"},{"name":"dateTime","type":"dateTime","textPreview":"8/1/2011"},{"name":"footer","type":"footer"},{"name":"slideNumber","type":"slideNumber","textPreview":"‹#›"}]}
+{"kind":"layout","layoutId":"/ppt/slideLayouts/slideLayout6.xml","name":"Title Only","type":"titleOnly","placeholders":[{"name":"title","type":"title","textPreview":"Click to edit Master title style"},{"name":"dateTime","type":"dateTime","textPreview":"8/1/2011"},{"name":"footer","type":"footer"},{"name":"slideNumber","type":"slideNumber","textPreview":"‹#›"}]}
+{"kind":"layout","layoutId":"/ppt/slideLayouts/slideLayout7.xml","name":"Blank","type":"blank","placeholders":[{"name":"dateTime","type":"dateTime","textPreview":"8/1/2011"},{"name":"footer","type":"footer"},{"name":"slideNumber","type":"slideNumber","textPreview":"‹#›"}]}
+{"kind":"layout","layoutId":"/ppt/slideLayouts/slideLayout8.xml","name":"Content with Caption","type":"objTx","placeholders":[{"name":"title","type":"title","textPreview":"Click to edit Master title style"},{"name":"content placeholder 2","textPreview":"Click to edit Master text styles | Second level | Third level | Fourth level | Fifth level"},{"name":"body","type":"body","textPreview":"Click to edit Master text styles"},{"name":"dateTime","type":"dateTime","textPreview":"8/1/2011"},{"name":"footer","type":"footer"},{"name":"slideNumber","type":"slideNumber","textPreview":"‹#›"}]}
+{"kind":"layout","layoutId":"/ppt/slideLayouts/slideLayout9.xml","name":"Picture with Caption","type":"picTx","placeholders":[{"name":"title","type":"title","textPreview":"Click to edit Master title style"},{"name":"picture","type":"picture"},{"name":"body","type":"body","textPreview":"Click to edit Master text styles"},{"name":"dateTime","type":"dateTime","textPreview":"8/1/2011"},{"name":"footer","type":"footer"},{"name":"slideNumber","type":"slideNumber","textPreview":"‹#›"}]}
+{"kind":"layout","layoutId":"/ppt/slideLayouts/slideLayout10.xml","name":"Title and Vertical Text","type":"vertTx","placeholders":[{"name":"title","type":"title","textPreview":"Click to edit Master title style"},{"name":"body","type":"body","textPreview":"Click to edit Master text styles | Second level | Third level | Fourth level | Fifth level"},{"name":"dateTime","type":"dateTime","textPreview":"8/1/2011"},{"name":"footer","type":"footer"},{"name":"slideNumber","type":"slideNumber","textPreview":"‹#›"}]}
+{"kind":"layout","layoutId":"/ppt/slideLayouts/slideLayout11.xml","name":"Vertical Title and Text","type":"vertTitleAndTx","placeholders":[{"name":"title","type":"title","textPreview":"Click to edit Master title style"},{"name":"body","type":"body","textPreview":"Click to edit Master text styles | Second level | Third level | Fourth level | Fifth level"},{"name":"dateTime","type":"dateTime","textPreview":"8/1/2011"},{"name":"footer","type":"footer"},{"name":"slideNumber","type":"slideNumber","textPreview":"‹#›"}]}
+{"kind":"slide","id":"sl/49pdzh","slide":1,"title":"TriageXR","textShapes":5}
+{"kind":"shape","id":"sh/q54b2pgn","slide":1,"name":"Freeform 2","bbox":[0,0,1920,1080]}
+{"kind":"textbox","id":"sh/r6xcbuh8","slide":1,"name":"TextBox 3","text":"TriageXR","textPreview":"TriageXR","textChars":8,"textLines":1,"bbox":[108,536.99,1396.72,284.14]}
+{"kind":"textbox","id":"sh/4jmt0fyh","slide":1,"name":"TextBox 4","text":"Spatial Hack AI","textPreview":"Spatial Hack AI","textChars":15,"textLines":1,"bbox":[108,464.49,597.29,64.26]}
+{"kind":"textbox","id":"sh/p4vu9kz2","slide":1,"name":"TextBox 5","text":"Project By :","textPreview":"Project By :","textChars":12,"textLines":1,"bbox":[108,907.62,366.41,40.87]}
+{"kind":"textbox","id":"sh/2h4by5gr","slide":1,"name":"TextBox 6","text":"Shreeraj, Guan Yu, Weishuo","textPreview":"Shreeraj, Guan Yu, Weishuo","textChars":26,"textLines":1,"bbox":[108,949.24,408.68,40.87]}
+{"kind":"textbox","id":"sh/3idc7ahw","slide":1,"name":"TextBox 7","text":"2026","textPreview":"2026","textChars":4,"textLines":1,"bbox":[1681.41,949.24,130.59,40.87]}
+{"kind":"notes","id":"nt/49pdzh","slide":1,"text":""}
+{"kind":"slide","id":"sl/z3s6mn","slide":2,"title":"Problem Statement","textShapes":2}
+{"kind":"shape","id":"sh/mx4z2pcz","slide":2,"name":"Freeform 2","bbox":[0,0,1920,1080]}
+{"kind":"shape","id":"sh/wn6h8zu1","slide":2,"name":"Freeform 4","bbox":[960,82.37,786.71,393.38]}
+{"kind":"textbox","id":"sh/hofy14bm","slide":2,"name":"TextBox 5","text":"Problem Statement","textPreview":"Problem Statement","textChars":17,"textLines":1,"bbox":[108,320.05,635.85,198.2]}
+{"kind":"textbox","id":"sh/uloz6pcv","slide":2,"name":"TextBox 6","text":"Brief 8: \nHow might we train first responders for a mass casualty incident with spatial computing and AI?\n","textPreview":"Brief 8:  | How might we train first responders for a mass casualty incident with spatial computing and AI? |","textChars":106,"textLines":3,"bbox":[108,551.28,635.85,147.67]}
+{"kind":"shape","id":"sh/vmxgzutg","slide":2,"name":"TextBox 7","bbox":[1109.56,581.19,607.84,44.33]}
+{"kind":"notes","id":"nt/z3s6mn","slide":2,"text":""}
+{"kind":"slide","id":"sl/86qsk7","slide":3,"title":"Slide 3","textShapes":0}
+{"kind":"shape","id":"sh/ponmd4vy","slide":3,"name":"Freeform 2","bbox":[0,0,1920,1080]}
+{"kind":"notes","id":"nt/86qsk7","slide":3,"text":""}
+{"kind":"slide","id":"sl/7uo83c","slide":4,"title":"Slide 4","textShapes":0}
+{"kind":"shape","id":"sh/6xszetwn","slide":4,"name":"Freeform 2","bbox":[0,0,1920,1080]}
+{"kind":"notes","id":"nt/7uo83c","slide":4,"text":""}
+{"kind":"slide","id":"sl/6kaiw4","slide":5,"title":"Slide 5","textShapes":0}
+{"kind":"shape","id":"sh/rupgjmpw","slide":5,"name":"Freeform 2","bbox":[0,0,1920,1080]}
+{"kind":"notes","id":"nt/6kaiw4","slide":5,"text":""}
+{"kind":"slide","id":"sl/3j1rsh","slide":6,"title":"Slide 6","textShapes":0}
+{"kind":"shape","id":"sh/ud8vux0j","slide":6,"name":"Freeform 2","bbox":[0,0,1920,1080]}
+{"kind":"notes","id":"nt/3j1rsh","slide":6,"text":""}
+{"kind":"slide","id":"sl/xwh3sa","slide":7,"title":"Slide 7","textShapes":0}
+{"kind":"shape","id":"sh/1832x8ra","slide":7,"name":"Freeform 2","bbox":[0,0,1920,1080]}
+{"kind":"notes","id":"nt/xwh3sa","slide":7,"text":""}
+{"kind":"slide","id":"sl/zu3xq1","slide":8,"title":"Slide 8","textShapes":0}
+{"kind":"shape","id":"sh/l0nypw7y","slide":8,"name":"Freeform 2","bbox":[0,0,1920,1080]}
+{"kind":"notes","id":"nt/zu3xq1","slide":8,"text":""}
+{"kind":"slide","id":"sl/ojpxt4","slide":9,"title":"Big Thanks!","textShapes":1}
+{"kind":"shape","id":"sh/ud4ze1kj","slide":9,"name":"Freeform 2","bbox":[0,0,1920,1080]}
+{"kind":"textbox","id":"sh/ved076l4","slide":9,"name":"TextBox 3","text":"Big Thanks!","textPreview":"Big Thanks!","textChars":11,"textLines":1,"bbox":[108,536.99,1396.72,284.14]}
+{"kind":"notes","id":"nt/ojpxt4","slide":9,"text":""}

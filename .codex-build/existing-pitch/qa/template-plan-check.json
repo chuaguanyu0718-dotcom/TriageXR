@@ -1,0 +1,10 @@
+{
+  "status": "pass",
+  "checkedAt": "2026-08-10T04:28:27.481Z",
+  "workspace": "/Users/shreeraj/projects/triagexr/TriageXR/.codex-build/existing-pitch",
+  "mapPath": "/Users/shreeraj/projects/triagexr/TriageXR/.codex-build/existing-pitch/template-frame-map.json",
+  "inspectPath": "/Users/shreeraj/projects/triagexr/TriageXR/.codex-build/existing-pitch/template-inspect/template-inspect.ndjson",
+  "sourceSlideCount": 5,
+  "issueCount": 0,
+  "issues": []
+}

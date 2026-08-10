@@ -35,6 +35,7 @@ struct TriageXRApp: App {
                 .environmentObject(collaboration)
                 .environmentObject(spatialAssessment)
                 .environmentObject(aiCoach)
+                .dynamicTypeSize(.large)
         }
         .defaultSize(width: 1120, height: 840)
         .windowResizability(.contentSize)
@@ -2262,6 +2263,8 @@ struct ImmersiveTriageView: View {
     @State private var spatialCPRIsHeld = false
     @State private var isClosingForDebrief = false
     @State private var selectedInventoryTool: InventoryTool?
+    @State private var controlPanelOffset = SIMD3<Float>(repeating: 0)
+    @State private var inventoryPanelOffset = SIMD3<Float>(repeating: 0)
     @StateObject private var incidentAudio = IncidentAudioCoordinator()
 
     var body: some View {
@@ -2272,7 +2275,7 @@ struct ImmersiveTriageView: View {
                 content.add(controls)
             }
             if let inventory = attachments.entity(for: "inventory") {
-                inventory.position = [-1.02, 0.38, -1.15]
+                inventory.position = inventoryPosition
                 content.add(inventory)
             }
             for checkpoint in SurveyCheckpoint.allCases {
@@ -2288,8 +2291,10 @@ struct ImmersiveTriageView: View {
                 if controls.parent == nil { content.add(controls) }
             }
             if let inventory = attachments.entity(for: "inventory"), inventory.parent == nil {
-                inventory.position = [-1.02, 0.38, -1.15]
+                inventory.position = inventoryPosition
                 content.add(inventory)
+            } else if let inventory = attachments.entity(for: "inventory") {
+                inventory.position = inventoryPosition
             }
             for checkpoint in SurveyCheckpoint.allCases {
                 guard let marker = attachments.entity(for: checkpoint.attachmentID) else { continue }
@@ -2299,16 +2304,20 @@ struct ImmersiveTriageView: View {
             }
         } attachments: {
             Attachment(id: "controls") {
-                SpatialControlPanel()
-                    .onFinish { finishScenario() }
-                    .environmentObject(session)
+                MovableSpatialPanel(positionOffset: $controlPanelOffset, title: "Move triage panel") {
+                    SpatialControlPanel()
+                        .onFinish { finishScenario() }
+                        .environmentObject(session)
+                }
             }
             Attachment(id: "inventory") {
-                InventoryToolbar(
-                    selectedTool: $selectedInventoryTool,
-                    replenishAction: { collaboration.submit(.replenishInventory) }
-                )
-                .environmentObject(session)
+                MovableSpatialPanel(positionOffset: $inventoryPanelOffset, title: "Move equipment panel") {
+                    InventoryToolbar(
+                        selectedTool: $selectedInventoryTool,
+                        replenishAction: { collaboration.submit(.replenishInventory) }
+                    )
+                    .environmentObject(session)
+                }
             }
             ForEach(SurveyCheckpoint.allCases) { checkpoint in
                 Attachment(id: checkpoint.attachmentID) {
@@ -2408,12 +2417,18 @@ struct ImmersiveTriageView: View {
     }
 
     private var controlPosition: SIMD3<Float> {
+        let base: SIMD3<Float>
         switch session.selectedCasualtyID {
-        case "casualty-a": [-0.75, -0.25, -1.95]
-        case "casualty-b": [0.85, -0.25, -2.8]
-        case "casualty-c": [0.75, -0.25, -1.9]
-        default: [0, 0.55, -1.35]
+        case "casualty-a": base = [-0.75, -0.25, -1.95]
+        case "casualty-b": base = [0.85, -0.25, -2.8]
+        case "casualty-c": base = [0.75, -0.25, -1.9]
+        default: base = [0, 0.55, -1.35]
         }
+        return base + controlPanelOffset
+    }
+
+    private var inventoryPosition: SIMD3<Float> {
+        SIMD3<Float>(-1.15, 0.38, -1.25) + inventoryPanelOffset
     }
 
     private func placeSurveyMarker(_ marker: Entity, for checkpoint: SurveyCheckpoint) {
@@ -3104,6 +3119,71 @@ struct ImmersiveTriageView: View {
     }
 }
 
+struct MovableSpatialPanel<Content: View>: View {
+    @Binding var positionOffset: SIMD3<Float>
+    let title: String
+    let content: Content
+    @State private var dragOrigin: SIMD3<Float>?
+
+    init(
+        positionOffset: Binding<SIMD3<Float>>,
+        title: String,
+        @ViewBuilder content: () -> Content
+    ) {
+        _positionOffset = positionOffset
+        self.title = title
+        self.content = content()
+    }
+
+    var body: some View {
+        VStack(spacing: 8) {
+            HStack(spacing: 10) {
+                Image(systemName: "arrow.up.and.down.and.arrow.left.and.right")
+                    .font(.headline.bold())
+                Text(title)
+                    .font(.headline.bold())
+                Text("Pinch and drag")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button {
+                    withAnimation(.snappy) {
+                        positionOffset = .zero
+                    }
+                } label: {
+                    Image(systemName: "arrow.uturn.backward.circle.fill")
+                        .font(.title3)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Reset panel position")
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+            .contentShape(Rectangle())
+            .background(.regularMaterial, in: Capsule())
+            .gesture(
+                DragGesture(minimumDistance: 2)
+                    .onChanged { value in
+                        if dragOrigin == nil { dragOrigin = positionOffset }
+                        guard let dragOrigin else { return }
+                        let metresPerPoint: Float = 0.00125
+                        positionOffset = dragOrigin + SIMD3<Float>(
+                            Float(value.translation.width) * metresPerPoint,
+                            -Float(value.translation.height) * metresPerPoint,
+                            0
+                        )
+                    }
+                    .onEnded { _ in dragOrigin = nil }
+            )
+            .accessibilityLabel(title)
+            .accessibilityHint("Pinch and drag to reposition this panel")
+
+            content
+        }
+        .dynamicTypeSize(.large)
+    }
+}
+
 struct InventoryToolbar: View {
     @EnvironmentObject private var session: TrainingSession
     @Binding var selectedTool: InventoryTool?
@@ -3149,9 +3229,9 @@ struct InventoryToolbar: View {
                                     .foregroundStyle(colour(for: tool))
                                     .frame(width: 28)
                                 VStack(alignment: .leading, spacing: 1) {
-                                    Text(tool.title).font(.subheadline.bold())
+                                    Text(tool.title).font(.headline.bold())
                                     Text(instruction(for: tool))
-                                        .font(.caption2)
+                                        .font(.subheadline)
                                         .foregroundStyle(.secondary)
                                 }
                                 Spacer()
@@ -3174,11 +3254,11 @@ struct InventoryToolbar: View {
                             .foregroundStyle(colour(for: selectedTool))
                     }
                 }
-                .frame(width: 290)
+                .frame(width: 360)
                 .transition(.move(edge: .leading).combined(with: .opacity))
             }
         }
-        .padding(12)
+        .padding(16)
         .glassBackgroundEffect(in: RoundedRectangle(cornerRadius: 22))
     }
 
@@ -3220,12 +3300,12 @@ struct SpatialControlPanel: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 16) {
             HStack(spacing: 10) {
                 Label(collaboration.localRole.title, systemImage: collaboration.localRole.icon)
-                    .font(.caption.bold())
+                    .font(.subheadline.bold())
                 Label(session.scenarioPace.title, systemImage: "gauge.with.dots.needle.50percent")
-                    .font(.caption.bold())
+                    .font(.subheadline.bold())
                     .foregroundStyle(.secondary)
                 Spacer()
                 if collaboration.isShared {
@@ -3260,6 +3340,7 @@ struct SpatialControlPanel: View {
                     VStack(alignment: .leading) {
                         Text(casualty.name).font(.title.bold())
                         Text(casualty.isDeteriorated ? "Condition changed - reassess" : casualty.location)
+                            .font(.headline)
                             .foregroundStyle(casualty.isDeteriorated ? .red : .secondary)
                     }
                     Spacer()
@@ -3282,7 +3363,7 @@ struct SpatialControlPanel: View {
                         .tint(casualty.conditionColour)
 
                     Label(casualty.visibleSymptoms, systemImage: "eye.fill")
-                        .font(.caption)
+                        .font(.subheadline)
                         .foregroundStyle(.secondary)
 
                     if casualty.deteriorationProfile.requiresCPR {
@@ -3338,7 +3419,7 @@ struct SpatialControlPanel: View {
 
                 if let conditionAlert = session.conditionAlert {
                     Label(conditionAlert, systemImage: "waveform.path.ecg")
-                        .font(.caption.bold())
+                        .font(.subheadline.bold())
                         .foregroundStyle(.orange)
                 }
 
@@ -3361,7 +3442,7 @@ struct SpatialControlPanel: View {
                         } label: {
                             VStack(spacing: 2) {
                                 Text(priority.rawValue).bold()
-                                Text(priority.title).font(.caption2)
+                                Text(priority.title).font(.caption)
                             }
                             .frame(maxWidth: .infinity)
                         }
@@ -3408,8 +3489,8 @@ struct SpatialControlPanel: View {
                 }
             }
         }
-        .padding(session.selectedCasualtyID == nil ? 20 : 26)
-        .frame(width: session.selectedCasualtyID == nil ? 540 : 760)
+        .padding(session.selectedCasualtyID == nil ? 26 : 32)
+        .frame(width: session.selectedCasualtyID == nil ? 650 : 900)
         .glassBackgroundEffect(in: RoundedRectangle(cornerRadius: 28))
     }
 

@@ -1,0 +1,112 @@
+{
+  "sourcePptx": "/Users/shreeraj/Downloads/TriageXR.pptx",
+  "mapPath": "/Users/shreeraj/projects/triagexr/TriageXR/.codex-build/existing-pitch/template-frame-map.json",
+  "output": "/Users/shreeraj/projects/triagexr/TriageXR/.codex-build/existing-pitch/template-starter.pptx",
+  "outputBytes": 9693542,
+  "sourceSlideCount": 5,
+  "slideCount": 9,
+  "previewDir": "/Users/shreeraj/projects/triagexr/TriageXR/.codex-build/existing-pitch/template-starter-preview",
+  "layoutDir": "/Users/shreeraj/projects/triagexr/TriageXR/.codex-build/existing-pitch/template-starter-layout",
+  "contactSheet": "/Users/shreeraj/projects/triagexr/TriageXR/.codex-build/existing-pitch/template-starter-contact-sheet.png",
+  "slides": [
+    {
+      "outputSlide": 1,
+      "sourceSlide": 1,
+      "narrativeRole": "brand opening preserve",
+      "reuseMode": "duplicate-slide",
+      "editTargetCount": 0,
+      "previewPath": "/Users/shreeraj/projects/triagexr/TriageXR/.codex-build/existing-pitch/template-starter-preview/starter-slide-01.png",
+      "previewRelativePath": "template-starter-preview/starter-slide-01.png",
+      "layoutPath": "/Users/shreeraj/projects/triagexr/TriageXR/.codex-build/existing-pitch/template-starter-layout/starter-slide-01.layout.json",
+      "layoutRelativePath": "template-starter-layout/starter-slide-01.layout.json"
+    },
+    {
+      "outputSlide": 2,
+      "sourceSlide": 2,
+      "narrativeRole": "brief section preserve",
+      "reuseMode": "duplicate-slide",
+      "editTargetCount": 0,
+      "previewPath": "/Users/shreeraj/projects/triagexr/TriageXR/.codex-build/existing-pitch/template-starter-preview/starter-slide-02.png",
+      "previewRelativePath": "template-starter-preview/starter-slide-02.png",
+      "layoutPath": "/Users/shreeraj/projects/triagexr/TriageXR/.codex-build/existing-pitch/template-starter-layout/starter-slide-02.layout.json",
+      "layoutRelativePath": "template-starter-layout/starter-slide-02.layout.json"
+    },
+    {
+      "outputSlide": 3,
+      "sourceSlide": 3,
+      "narrativeRole": "problem analysis content",
+      "reuseMode": "duplicate-slide",
+      "editTargetCount": 2,
+      "previewPath": "/Users/shreeraj/projects/triagexr/TriageXR/.codex-build/existing-pitch/template-starter-preview/starter-slide-03.png",
+      "previewRelativePath": "template-starter-preview/starter-slide-03.png",
+      "layoutPath": "/Users/shreeraj/projects/triagexr/TriageXR/.codex-build/existing-pitch/template-starter-layout/starter-slide-03.layout.json",
+      "layoutRelativePath": "template-starter-layout/starter-slide-03.layout.json"
+    },
+    {
+      "outputSlide": 4,
+      "sourceSlide": 4,
+      "narrativeRole": "experience flow content",
+      "reuseMode": "duplicate-slide",
+      "editTargetCount": 2,
+      "previewPath": "/Users/shreeraj/projects/triagexr/TriageXR/.codex-build/existing-pitch/template-starter-preview/starter-slide-04.png",
+      "previewRelativePath": "template-starter-preview/starter-slide-04.png",
+      "layoutPath": "/Users/shreeraj/projects/triagexr/TriageXR/.codex-build/existing-pitch/template-starter-layout/starter-slide-04.layout.json",
+      "layoutRelativePath": "template-starter-layout/starter-slide-04.layout.json"
+    },
+    {
+      "outputSlide": 5,
+      "sourceSlide": 3,
+      "narrativeRole": "deterioration timeline content",
+      "reuseMode": "duplicate-slide",
+      "editTargetCount": 2,
+      "previewPath": "/Users/shreeraj/projects/triagexr/TriageXR/.codex-build/existing-pitch/template-starter-preview/starter-slide-05.png",
+      "previewRelativePath": "template-starter-preview/starter-slide-05.png",
+      "layoutPath": "/Users/shreeraj/projects/triagexr/TriageXR/.codex-build/existing-pitch/template-starter-layout/starter-slide-05.layout.json",
+      "layoutRelativePath": "template-starter-layout/starter-slide-05.layout.json"
+    },
+    {
+      "outputSlide": 6,
+      "sourceSlide": 4,
+      "narrativeRole": "technology architecture content",
+      "reuseMode": "duplicate-slide",
+      "editTargetCount": 2,
+      "previewPath": "/Users/shreeraj/projects/triagexr/TriageXR/.codex-build/existing-pitch/template-starter-preview/starter-slide-06.png",
+      "previewRelativePath": "template-starter-preview/starter-slide-06.png",
+      "layoutPath": "/Users/shreeraj/projects/triagexr/TriageXR/.codex-build/existing-pitch/template-starter-layout/starter-slide-06.layout.json",
+      "layoutRelativePath": "template-starter-layout/starter-slide-06.layout.json"
+    },
+    {
+      "outputSlide": 7,
+      "sourceSlide": 3,
+      "narrativeRole": "differentiation comparison content",
+      "reuseMode": "duplicate-slide",
+      "editTargetCount": 2,
+      "previewPath": "/Users/shreeraj/projects/triagexr/TriageXR/.codex-build/existing-pitch/template-starter-preview/starter-slide-07.png",
+      "previewRelativePath": "template-starter-preview/starter-slide-07.png",
+      "layoutPath": "/Users/shreeraj/projects/triagexr/TriageXR/.codex-build/existing-pitch/template-starter-layout/starter-slide-07.layout.json",
+      "layoutRelativePath": "template-starter-layout/starter-slide-07.layout.json"
+    },
+    {
+      "outputSlide": 8,
+      "sourceSlide": 4,
+      "narrativeRole": "prototype proof evidence",
+      "reuseMode": "duplicate-slide",
+      "editTargetCount": 2,
+      "previewPath": "/Users/shreeraj/projects/triagexr/TriageXR/.codex-build/existing-pitch/template-starter-preview/starter-slide-08.png",
+      "previewRelativePath": "template-starter-preview/starter-slide-08.png",
+      "layoutPath": "/Users/shreeraj/projects/triagexr/TriageXR/.codex-build/existing-pitch/template-starter-layout/starter-slide-08.layout.json",
+      "layoutRelativePath": "template-starter-layout/starter-slide-08.layout.json"
+    },
+    {
+      "outputSlide": 9,
+      "sourceSlide": 5,
+      "narrativeRole": "closing ask content",
+      "reuseMode": "duplicate-slide",
+      "editTargetCount": 3,
+      "previewPath": "/Users/shreeraj/projects/triagexr/TriageXR/.codex-build/existing-pitch/template-starter-preview/starter-slide-09.png",
+      "previewRelativePath": "template-starter-preview/starter-slide-09.png",
+      "layoutPath": "/Users/shreeraj/projects/triagexr/TriageXR/.codex-build/existing-pitch/template-starter-layout/starter-slide-09.layout.json",
+      "layoutRelativePath": "template-starter-layout/starter-slide-09.layout.json"
+    }
+  ]
+}

@@ -1,0 +1,1 @@
+Product behavior, counts, scoring, timing, collaboration, spatial verification, and AI guardrails are sourced from the local TriageXR README and Swift/relay implementation. The mass-casualty training photograph used on slide 3 was supplied by the user in this task's prior context. No external web research or invented performance outcomes are used.

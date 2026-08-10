@@ -1,0 +1,13 @@
+{
+  "status": "pass",
+  "checkedAt": "2026-08-10T04:33:16.926Z",
+  "workspace": "/Users/shreeraj/projects/triagexr/TriageXR/.codex-build/existing-pitch",
+  "finalPptx": "/Users/shreeraj/projects/triagexr/TriageXR/TriageXR-Hackathon-Judges.pptx",
+  "starterPptx": "/Users/shreeraj/projects/triagexr/TriageXR/.codex-build/existing-pitch/template-starter.pptx",
+  "mapPath": "/Users/shreeraj/projects/triagexr/TriageXR/.codex-build/existing-pitch/template-frame-map.json",
+  "starterLayoutDir": "/Users/shreeraj/projects/triagexr/TriageXR/.codex-build/existing-pitch/template-starter-layout",
+  "finalLayoutDir": "/Users/shreeraj/projects/triagexr/TriageXR/.codex-build/existing-pitch/final-render",
+  "editDir": "/Users/shreeraj/projects/triagexr/TriageXR/.codex-build/existing-pitch",
+  "issueCount": 0,
+  "issues": []
+}
