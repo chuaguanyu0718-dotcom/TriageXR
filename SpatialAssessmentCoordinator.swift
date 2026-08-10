@@ -256,6 +256,11 @@ final class SpatialAssessmentCoordinator: ObservableObject {
             return
         }
 
+        guard !trainingSession.isPaused else {
+            resetSurveyProgress(keepReference: true)
+            return
+        }
+
         guard canSubmitSurveyEvidence?() ?? true else {
             resetSurveyProgress(keepReference: true)
             return
@@ -296,6 +301,7 @@ final class SpatialAssessmentCoordinator: ObservableObject {
 
     func simulatorVerify(_ assessment: Assessment, casualtyID: String) {
         guard status == .simulator,
+              trainingSession?.isPaused == false,
               trainingSession?.selectedCasualtyID == casualtyID else {
             return
         }
@@ -311,6 +317,7 @@ final class SpatialAssessmentCoordinator: ObservableObject {
     private func process(anchor: HandAnchor) {
         guard let trainingSession,
               trainingSession.phase == .active,
+              !trainingSession.isPaused,
               let casualty = trainingSession.selectedCasualty,
               let assessment = Assessment.allCases.first(where: {
                   !casualty.completedAssessments.contains($0)

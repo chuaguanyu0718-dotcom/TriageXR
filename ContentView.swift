@@ -87,9 +87,13 @@ struct RecommendedAction {
 
 @MainActor
 final class TrainingSession: ObservableObject {
+    private static let historyStorageKey = "TriageXR.training-history.v1"
+
     let scenario = ScenarioCatalog.roadsideFoundation
     @Published var phase: ScenarioPhase = .briefing
+    @Published var trainingMode: TrainingMode = .guided
     @Published var scenarioPace: ScenarioPace = .demo
+    @Published var isPaused = false
     @Published var casualties: [Casualty] = TrainingSession.makeCasualties()
     @Published var selectedCasualtyID: String?
     @Published var hazardIdentified = false
@@ -100,16 +104,29 @@ final class TrainingSession: ObservableObject {
     @Published var deteriorationTriggered = false
     @Published var events: [SessionEvent] = []
     @Published var decisionEvidence: [DecisionEvidence] = []
+    @Published var responseTempo = ResponseTempo()
     @Published var elapsed: TimeInterval = 0
     @Published var conditionAlert: String? = nil
     @Published private(set) var revision = 0
+    @Published private(set) var historyArchive = TrainingHistoryArchive()
 
     private var lastTickAt: Date?
     private var timer: Timer?
     private let voice = AVSpeechSynthesizer()
     private var cuePlayer: AVAudioPlayer?
     private var currentActorRole: ResponderRole = .incidentCommander
+    private let historyDefaults: UserDefaults
     var didChange: ((SharedIncidentSnapshot) -> Void)?
+
+    init(historyDefaults: UserDefaults = .standard) {
+        self.historyDefaults = historyDefaults
+        guard let data = historyDefaults.data(forKey: Self.historyStorageKey),
+              let archive = try? JSONDecoder().decode(TrainingHistoryArchive.self, from: data),
+              archive.schemaVersion == TrainingHistoryArchive.currentSchemaVersion else {
+            return
+        }
+        historyArchive = archive
+    }
 
     var selectedCasualty: Casualty? {
         guard let id = selectedCasualtyID else { return nil }
@@ -223,6 +240,17 @@ final class TrainingSession: ObservableObject {
         currentActorRole = actorRole
         defer { currentActorRole = .incidentCommander }
 
+        if phase == .active, isPaused {
+            switch command {
+            case .setScenarioPaused(false), .end, .reset, .selectCasualty, .closeCasualty:
+                break
+            default:
+                conditionAlert = "Exercise paused — resume the incident clock before recording operational actions."
+                commitChange()
+                return
+            }
+        }
+
         switch command {
         case .begin:
             begin()
@@ -230,8 +258,12 @@ final class TrainingSession: ObservableObject {
             end()
         case .reset:
             reset()
+        case .setTrainingMode(let mode):
+            setTrainingMode(mode)
         case .setScenarioPace(let pace):
             setScenarioPace(pace)
+        case .setScenarioPaused(let paused):
+            setScenarioPaused(paused)
         case .inspectSurveyCheckpoint(let checkpoint):
             inspectSurveyCheckpoint(checkpoint)
         case .recordSurveyCoverage(let bins):
@@ -284,7 +316,9 @@ final class TrainingSession: ObservableObject {
         SharedIncidentSnapshot(
             revision: revision,
             phase: phase,
+            trainingMode: trainingMode,
             scenarioPace: scenarioPace,
+            isPaused: isPaused,
             casualties: casualties,
             hazardIdentified: hazardIdentified,
             hazardCommunicated: hazardCommunicated,
@@ -294,6 +328,7 @@ final class TrainingSession: ObservableObject {
             deteriorationTriggered: deteriorationTriggered,
             events: events,
             decisionEvidence: decisionEvidence,
+            responseTempo: responseTempo,
             elapsed: elapsed,
             conditionAlert: conditionAlert
         )
@@ -301,11 +336,14 @@ final class TrainingSession: ObservableObject {
 
     func applySharedSnapshot(_ snapshot: SharedIncidentSnapshot, force: Bool = false) {
         guard force || snapshot.revision >= revision else { return }
+        let wasComplete = phase == .complete
         timer?.invalidate()
         timer = nil
         revision = snapshot.revision
         phase = snapshot.phase
+        trainingMode = snapshot.trainingMode
         scenarioPace = snapshot.scenarioPace
+        isPaused = snapshot.isPaused
         casualties = snapshot.casualties
         if snapshot.phase != .active {
             selectedCasualtyID = nil
@@ -318,9 +356,13 @@ final class TrainingSession: ObservableObject {
         deteriorationTriggered = snapshot.deteriorationTriggered
         events = snapshot.events
         decisionEvidence = snapshot.decisionEvidence
+        responseTempo = snapshot.responseTempo
         elapsed = snapshot.elapsed
         conditionAlert = snapshot.conditionAlert
         lastTickAt = nil
+        if snapshot.phase == .complete && !wasComplete {
+            saveCompletedRun()
+        }
     }
 
     func begin() {
@@ -332,12 +374,15 @@ final class TrainingSession: ObservableObject {
         surveyCoverageBins = []
         resourceRequestSent = false
         deteriorationTriggered = false
+        isPaused = false
         events = []
         decisionEvidence = []
+        responseTempo = ResponseTempo()
         elapsed = 0
         conditionAlert = nil
         phase = .active
         lastTickAt = Date()
+        responseTempo.mark(.incidentStarted, at: 0)
         record(
             "Scenario",
             "\(scenario.title) started (content v\(scenario.version)).",
@@ -348,12 +393,20 @@ final class TrainingSession: ObservableObject {
                 "Three reported casualties",
                 "Hazards initially unknown",
                 "One condition may change",
+                "Training mode: \(trainingMode.title)",
                 "Exercise pace: \(scenarioPace.title)"
             ],
             consequence: "The incident clock and untreated deterioration clock started."
         )
         speak("Dispatch. Three casualties reported. Survey the scene before approach.")
         startTimer()
+    }
+
+    func setTrainingMode(_ mode: TrainingMode) {
+        guard phase == .briefing, trainingMode != mode else { return }
+        trainingMode = mode
+        conditionAlert = nil
+        commitChange()
     }
 
     func setScenarioPace(_ pace: ScenarioPace) {
@@ -363,8 +416,35 @@ final class TrainingSession: ObservableObject {
         commitChange()
     }
 
+    func setScenarioPaused(_ paused: Bool) {
+        guard phase == .active, isPaused != paused else { return }
+        if paused {
+            for index in casualties.indices where casualties[index].isReceivingCPR {
+                casualties[index].isReceivingCPR = false
+                casualties[index].activeCPRBoutSeconds = 0
+            }
+        }
+        isPaused = paused
+        lastTickAt = paused ? nil : Date()
+        conditionAlert = paused
+            ? "Exercise paused by \(currentActorRole.title). Incident time and deterioration are frozen."
+            : "Exercise resumed by \(currentActorRole.title)."
+        record(
+            "Instructor control",
+            paused ? "Paused the exercise clock." : "Resumed the exercise clock.",
+            outcome: paused ? "Scenario frozen" : "Scenario active",
+            evidenceOutcome: .scenarioUpdate,
+            rationale: "The host-authoritative exercise clock keeps every participant on the same instructor-controlled timeline.",
+            cues: ["Control used by \(currentActorRole.title)"],
+            consequence: paused
+                ? "Incident time and deterioration stopped advancing; active simulated CPR holds were released."
+                : "Incident time and casualty state progression resumed."
+        )
+    }
+
     func end() {
         guard phase == .active else { return }
+        responseTempo.mark(.scenarioCompleted, at: elapsed)
         for index in casualties.indices where casualties[index].isReceivingCPR {
             casualties[index].isReceivingCPR = false
             casualties[index].activeCPRBoutSeconds = 0
@@ -386,19 +466,23 @@ final class TrainingSession: ObservableObject {
         timer?.invalidate()
         timer = nil
         lastTickAt = nil
+        isPaused = false
         phase = .complete
         selectedCasualtyID = nil
         commitChange()
+        saveCompletedRun()
     }
 
     func reset() {
         timer?.invalidate()
         timer = nil
         lastTickAt = nil
+        isPaused = false
         phase = .briefing
         selectedCasualtyID = nil
         elapsed = 0
         conditionAlert = nil
+        responseTempo = ResponseTempo()
         revision += 1
         didChange?(sharedSnapshot())
     }
@@ -420,6 +504,9 @@ final class TrainingSession: ObservableObject {
         )
         let newlyCompleted = surveyedCheckpoints.subtracting(previousCheckpoints)
         let isComplete = sceneSurveyed
+        if isComplete {
+            responseTempo.mark(.sceneSurveyed, at: elapsed)
+        }
         let percent = Int((surveyCoverageFraction * 100).rounded())
         let completedTitles = newlyCompleted
             .sorted { $0.rawValue < $1.rawValue }
@@ -456,6 +543,7 @@ final class TrainingSession: ObservableObject {
     func identifyHazard() {
         guard phase == .active, !hazardIdentified else { return }
         hazardIdentified = true
+        responseTempo.mark(.hazardIdentified, at: elapsed)
         record(
             "Safety",
             "Identified the leaking-fuel hazard and established an exclusion zone.",
@@ -472,6 +560,7 @@ final class TrainingSession: ObservableObject {
     func communicateHazard() {
         guard phase == .active, hazardIdentified, !hazardCommunicated else { return }
         hazardCommunicated = true
+        responseTempo.mark(.hazardCommunicated, at: elapsed)
         record(
             "Communication",
             "Reported the fuel hazard to incident command.",
@@ -487,6 +576,7 @@ final class TrainingSession: ObservableObject {
     func requestResources() {
         guard phase == .active, !resourceRequestSent else { return }
         resourceRequestSent = true
+        responseTempo.mark(.resourcesRequested, at: elapsed)
         record(
             "Communication",
             "Requested fire suppression and additional medical resources.",
@@ -503,6 +593,7 @@ final class TrainingSession: ObservableObject {
         guard phase == .active,
               casualties.contains(where: { $0.id == id }) else { return }
         selectedCasualtyID = id
+        responseTempo.mark(.firstCasualtyContact, at: elapsed)
         if let casualty = casualties.first(where: { $0.id == id }) {
             record(
                 "Navigation",
@@ -539,6 +630,7 @@ final class TrainingSession: ObservableObject {
               let index = casualties.firstIndex(where: { $0.id == casualtyID }) else { return }
         let wasNew = casualties[index].completedAssessments.insert(assessment).inserted
         if wasNew {
+            responseTempo.mark(.firstAssessment, at: elapsed)
             let casualty = casualties[index]
             let finding = casualty.finding(for: assessment)
             record(
@@ -580,6 +672,12 @@ final class TrainingSession: ObservableObject {
         let previous = casualties[index].assignedPriority
         casualties[index].assignedPriority = priority
         let correct = priority == casualties[index].currentCorrectPriority
+        if correct {
+            responseTempo.mark(.firstCorrectTag, at: elapsed)
+        }
+        if taggedCount == casualties.count {
+            responseTempo.mark(.allCasualtiesTagged, at: elapsed)
+        }
         let action = previous == nil ? "Tagged" : "Retagged"
         let corrected = previous != nil && previous != casualties[index].currentCorrectPriority && correct
         let casualty = casualties[index]
@@ -603,6 +701,7 @@ final class TrainingSession: ObservableObject {
 
     func beginCPR(for casualtyID: String) {
         guard phase == .active,
+              !isPaused,
               let index = casualties.firstIndex(where: { $0.id == casualtyID }),
               casualties[index].deteriorationProfile.requiresCPR,
               !casualties[index].isReceivingCPR,
@@ -610,6 +709,7 @@ final class TrainingSession: ObservableObject {
         casualties[index].isReceivingCPR = true
         casualties[index].activeCPRBoutSeconds = 0
         casualties[index].cprSessionCount += 1
+        responseTempo.mark(.cprStarted, at: elapsed)
         let pausedAt = casualties[index].neurologicalRiskTimeRemaining ?? 0
         conditionAlert = "Simulated CPR started for \(casualties[index].name). Keep holding to represent continuous compression coverage."
         record(
@@ -695,9 +795,11 @@ final class TrainingSession: ObservableObject {
             scenarioID: scenario.id,
             scenarioVersion: scenario.version,
             scenarioTitle: scenario.title,
+            trainingMode: trainingMode,
             scenarioPace: scenarioPace,
             exerciseElapsedSeconds: elapsed,
             score: score,
+            responseTempo: responseTempo,
             surveyCoveragePercent: Int((surveyCoverageFraction * 100).rounded()),
             coveredSurveyBins: surveyCoverageBins.sorted(),
             competencies: [
@@ -785,7 +887,7 @@ final class TrainingSession: ObservableObject {
             repeats: true
         ) { [weak self] _ in
             MainActor.assumeIsolated {
-                guard let self, self.phase == .active else { return }
+                guard let self, self.phase == .active, !self.isPaused else { return }
                 self.advanceClock()
                 self.commitChange()
             }
@@ -799,7 +901,10 @@ final class TrainingSession: ObservableObject {
     }
 
     private func advanceClock(to now: Date = Date()) {
-        guard phase == .active else { return }
+        guard phase == .active, !isPaused else {
+            lastTickAt = nil
+            return
+        }
         guard let lastTickAt else {
             self.lastTickAt = now
             return
@@ -845,17 +950,29 @@ final class TrainingSession: ObservableObject {
 
         switch stage {
         case 1:
-            message = "\(name): visible oxygen-deprivation signs are developing. Four exercise minutes remain to the fictional escalation threshold."
-            spokenMessage = "Condition change. Four exercise minutes remain on the fictional escalation timer."
+            message = trainingMode.showsExactCountdowns
+                ? "\(name): visible oxygen-deprivation signs are developing. Four exercise minutes remain to the fictional escalation threshold."
+                : "\(name): visible oxygen-deprivation signs are developing. Reassess the casualty."
+            spokenMessage = trainingMode.showsExactCountdowns
+                ? "Condition change. Four exercise minutes remain on the fictional escalation timer."
+                : "Condition change. Visible deterioration requires reassessment."
         case 2:
-            message = "\(name): condition worsening. One exercise minute remains to the fictional escalation threshold."
-            spokenMessage = "Urgent. One exercise minute remains on the fictional escalation timer."
+            message = trainingMode.showsExactCountdowns
+                ? "\(name): condition worsening. One exercise minute remains to the fictional escalation threshold."
+                : "\(name): condition worsening. Immediate reassessment is required."
+            spokenMessage = trainingMode.showsExactCountdowns
+                ? "Urgent. One exercise minute remains on the fictional escalation timer."
+                : "Urgent condition change. Immediate reassessment is required."
         case 3:
             message = "\(name): the fictional six-minute untreated escalation threshold has been reached."
             spokenMessage = "Critical warning. The fictional six minute escalation threshold has been reached."
         case 4:
-            message = "\(name): profound deterioration. Two minutes remain to the scenario death threshold."
-            spokenMessage = "Critical warning. Two minutes remain to the scenario death threshold."
+            message = trainingMode.showsExactCountdowns
+                ? "\(name): profound deterioration. Two minutes remain to the scenario death threshold."
+                : "\(name): profound deterioration. The scenario outcome is at immediate risk."
+            spokenMessage = trainingMode.showsExactCountdowns
+                ? "Critical warning. Two minutes remain to the scenario death threshold."
+                : "Critical warning. The scenario outcome is at immediate risk."
         default:
             casualties[index].isDeceased = true
             casualties[index].health = 0
@@ -1048,6 +1165,21 @@ final class TrainingSession: ObservableObject {
         voice.speak(utterance)
     }
 
+    private func saveCompletedRun() {
+        let run = TrainingRunSummary(
+            scenarioID: scenario.id,
+            scenarioVersion: scenario.version,
+            trainingMode: trainingMode,
+            scenarioPace: scenarioPace,
+            exerciseElapsedSeconds: elapsed,
+            score: score,
+            responseTempo: responseTempo
+        )
+        historyArchive.record(run)
+        guard let data = try? JSONEncoder().encode(historyArchive) else { return }
+        historyDefaults.set(data, forKey: Self.historyStorageKey)
+    }
+
     static func makeCasualties() -> [Casualty] {
         ScenarioCatalog.roadsideFoundation.makeCasualties()
     }
@@ -1202,6 +1334,8 @@ struct BriefingView: View {
                 }
 
                 DemoReadinessView()
+
+                TrainingHistoryView()
 
                 CollaborationLobbyView()
 
@@ -1372,6 +1506,31 @@ struct CollaborationLobbyView: View {
 
                 HStack(spacing: 18) {
                     VStack(alignment: .leading, spacing: 3) {
+                        Text("Training mode")
+                            .font(.caption.bold())
+                            .foregroundStyle(.secondary)
+                        Text(session.trainingMode.detail)
+                            .font(.caption)
+                    }
+                    Spacer()
+                    Picker(
+                        "Training mode",
+                        selection: Binding(
+                            get: { session.trainingMode },
+                            set: { collaboration.submit(.setTrainingMode($0)) }
+                        )
+                    ) {
+                        ForEach(TrainingMode.allCases) { mode in
+                            Text(mode.title).tag(mode)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .frame(width: 250)
+                    .disabled(!collaboration.canBeginIncident)
+                }
+
+                HStack(spacing: 18) {
+                    VStack(alignment: .leading, spacing: 3) {
                         Text("Exercise pace")
                             .font(.caption.bold())
                             .foregroundStyle(.secondary)
@@ -1427,6 +1586,95 @@ struct CollaborationLobbyView: View {
             }
             .padding(.vertical, 8)
         }
+    }
+}
+
+struct TrainingHistoryView: View {
+    @EnvironmentObject private var session: TrainingSession
+
+    private var archive: TrainingHistoryArchive { session.historyArchive }
+
+    var body: some View {
+        GroupBox("Training history") {
+            if archive.runs.isEmpty {
+                Label(
+                    "Complete a run to establish a personal best and compare response tempo over time.",
+                    systemImage: "chart.line.uptrend.xyaxis"
+                )
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.vertical, 8)
+            } else {
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack(spacing: 10) {
+                        HistoryMetric(
+                            title: "Personal best",
+                            value: "\(archive.personalBest ?? 0)",
+                            icon: "trophy.fill",
+                            colour: .yellow
+                        )
+                        HistoryMetric(
+                            title: "Average",
+                            value: "\(archive.averageScore ?? 0)",
+                            icon: "chart.bar.fill",
+                            colour: .blue
+                        )
+                        HistoryMetric(
+                            title: "Completed",
+                            value: "\(archive.runs.count)",
+                            icon: "checkmark.seal.fill",
+                            colour: .green
+                        )
+                    }
+
+                    ForEach(archive.runs.prefix(3)) { run in
+                        HStack(spacing: 12) {
+                            Text("\(run.score.total)")
+                                .font(.title3.bold().monospacedDigit())
+                                .frame(width: 42)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(run.trainingMode.title)
+                                    .font(.subheadline.bold())
+                                Text(run.completedAt.formatted(date: .abbreviated, time: .shortened))
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Label(run.scenarioPace.title, systemImage: "gauge.with.dots.needle.50percent")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        .padding(.vertical, 2)
+                    }
+                }
+                .padding(.vertical, 8)
+            }
+        }
+    }
+}
+
+struct HistoryMetric: View {
+    let title: String
+    let value: String
+    let icon: String
+    let colour: Color
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: icon)
+                .foregroundStyle(colour)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(value)
+                    .font(.headline.monospacedDigit())
+                Text(title)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(10)
+        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12))
     }
 }
 
@@ -1711,6 +1959,8 @@ struct AfterActionReviewView: View {
                     ScoreCard(title: "Communication", score: session.score.communication, maximum: 15)
                 }
 
+                ResponseTempoView(tempo: session.responseTempo)
+
                 InstructorCompetencyView(results: session.instructorReport.competencies)
 
                 GroundedAICoachView()
@@ -1774,6 +2024,93 @@ struct AfterActionReviewView: View {
     private var coachingTaskID: String {
         let lastID = session.decisionEvidence.last?.id.uuidString ?? "none"
         return "\(session.decisionEvidence.count)-\(lastID)-\(session.score.total)"
+    }
+}
+
+struct ResponseTempoView: View {
+    let tempo: ResponseTempo
+
+    private let displayedMilestones: [ResponseMilestone] = [
+        .sceneSurveyed,
+        .hazardIdentified,
+        .firstCasualtyContact,
+        .firstAssessment,
+        .firstCorrectTag,
+        .cprStarted,
+        .hazardCommunicated,
+        .resourcesRequested,
+        .allCasualtiesTagged,
+        .scenarioCompleted
+    ]
+
+    var body: some View {
+        GroupBox("Response tempo") {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("First-occurrence timestamps from the authoritative exercise clock. These are descriptive training evidence, not clinical performance thresholds.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                LazyVGrid(
+                    columns: [GridItem(.flexible()), GridItem(.flexible())],
+                    alignment: .leading,
+                    spacing: 10
+                ) {
+                    ForEach(displayedMilestones) { milestone in
+                        HStack(spacing: 12) {
+                            Image(systemName: icon(for: milestone))
+                                .foregroundStyle(tempo.elapsed(for: milestone) == nil ? .secondary : colour(for: milestone))
+                                .frame(width: 24)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(milestone.title)
+                                    .font(.subheadline.bold())
+                                Text(formattedTime(for: milestone))
+                                    .font(.caption.monospacedDigit())
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Image(systemName: tempo.elapsed(for: milestone) == nil ? "minus.circle" : "checkmark.circle.fill")
+                                .foregroundStyle(tempo.elapsed(for: milestone) == nil ? .secondary : .green)
+                        }
+                        .padding(10)
+                        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12))
+                        .accessibilityElement(children: .combine)
+                    }
+                }
+            }
+            .padding(.vertical, 8)
+        }
+    }
+
+    private func formattedTime(for milestone: ResponseMilestone) -> String {
+        guard let elapsed = tempo.elapsed(for: milestone) else { return "Not captured" }
+        let seconds = max(0, Int(elapsed.rounded()))
+        return String(format: "%02d:%02d exercise time", seconds / 60, seconds % 60)
+    }
+
+    private func icon(for milestone: ResponseMilestone) -> String {
+        switch milestone {
+        case .incidentStarted: "play.circle.fill"
+        case .sceneSurveyed: "view.360"
+        case .hazardIdentified: "exclamationmark.triangle.fill"
+        case .firstCasualtyContact: "figure.walk.arrival"
+        case .firstAssessment: "waveform.path.ecg"
+        case .firstCorrectTag: "tag.fill"
+        case .cprStarted: "heart.fill"
+        case .hazardCommunicated: "radio"
+        case .resourcesRequested: "person.3.fill"
+        case .allCasualtiesTagged: "checkmark.seal.fill"
+        case .scenarioCompleted: "flag.checkered"
+        }
+    }
+
+    private func colour(for milestone: ResponseMilestone) -> Color {
+        switch milestone {
+        case .hazardIdentified, .hazardCommunicated: .orange
+        case .cprStarted: .red
+        case .sceneSurveyed, .scenarioCompleted, .allCasualtiesTagged: .green
+        case .firstCorrectTag: .purple
+        default: .blue
+        }
     }
 }
 
@@ -2472,6 +2809,11 @@ struct ImmersiveTriageView: View {
             guard phase == .complete else { return }
             closeForDebrief()
         }
+        .onChange(of: session.isPaused) { _, isPaused in
+            if isPaused {
+                spatialCPRIsHeld = false
+            }
+        }
     }
 
     private var controlPosition: SIMD3<Float> {
@@ -2574,6 +2916,7 @@ struct ImmersiveTriageView: View {
                     continue
                 }
                 let isActive = session.selectedCasualtyID == casualty.id
+                    && !session.isPaused
                     && nextAssessment == assessment
                 target.isEnabled = isActive
                 target.model?.materials = [
@@ -3091,10 +3434,18 @@ struct SpatialControlPanel: View {
             HStack(spacing: 10) {
                 Label(collaboration.localRole.title, systemImage: collaboration.localRole.icon)
                     .font(.caption.bold())
-                Label(session.scenarioPace.title, systemImage: "gauge.with.dots.needle.50percent")
-                    .font(.caption.bold())
-                    .foregroundStyle(.secondary)
                 Spacer()
+                if IncidentCommand.setScenarioPaused(!session.isPaused)
+                    .isPermitted(for: collaboration.localRole) {
+                    Button {
+                        collaboration.submit(.setScenarioPaused(!session.isPaused))
+                    } label: {
+                        Label(session.isPaused ? "Resume" : "Pause", systemImage: session.isPaused ? "play.fill" : "pause.fill")
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .tint(session.isPaused ? .green : .orange)
+                }
                 if collaboration.isShared {
                     Label("\(collaboration.participantCount) live", systemImage: "shareplay")
                         .font(.caption.bold())
@@ -3106,7 +3457,32 @@ struct SpatialControlPanel: View {
                 }
             }
 
-            if session.scenarioPace == .demo {
+            HStack(spacing: 14) {
+                Label(session.scenarioPace.title, systemImage: "gauge.with.dots.needle.50percent")
+                Label(
+                    session.trainingMode.title,
+                    systemImage: session.trainingMode == .guided
+                        ? "lightbulb.fill"
+                        : "checkmark.shield.fill"
+                )
+                Spacer()
+            }
+            .font(.caption.bold())
+            .foregroundStyle(.secondary)
+
+            if session.isPaused {
+                Label(
+                    "Exercise paused — incident time, deterioration, and treatment coverage are frozen for every participant.",
+                    systemImage: "pause.circle.fill"
+                )
+                .font(.caption.bold())
+                .foregroundStyle(.orange)
+                .padding(10)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 12))
+            }
+
+            if session.scenarioPace == .demo && session.trainingMode.showsGuidance {
                 JudgeDemoProgressView()
             }
 
@@ -3117,13 +3493,23 @@ struct SpatialControlPanel: View {
             }
 
             if session.selectedCasualty == nil {
-                NextActionCard(action: session.nextRecommendedAction, compact: true)
+                if session.trainingMode.showsGuidance {
+                    NextActionCard(action: session.nextRecommendedAction, compact: true)
+                } else {
+                    Label(
+                        "Assessed run — prompts are reduced. Use scene evidence and your assigned role.",
+                        systemImage: "checkmark.shield.fill"
+                    )
+                    .font(.caption.bold())
+                    .foregroundStyle(.secondary)
+                }
                 if !session.sceneSurveyed {
                     SurveyProgressView(
                         completed: session.surveyedCheckpoints,
                         coverageBins: session.surveyCoverageBins
                     )
                 }
+                IncidentCommandBoardView()
             }
 
             if let casualty = session.selectedCasualty {
@@ -3164,7 +3550,8 @@ struct SpatialControlPanel: View {
                             )
                             .foregroundStyle(.red)
                             .font(.headline)
-                        } else if let remaining = casualty.neurologicalRiskTimeRemaining,
+                        } else if session.trainingMode.showsExactCountdowns,
+                                  let remaining = casualty.neurologicalRiskTimeRemaining,
                                   remaining > 0 {
                             HStack {
                                 Label("Fictional escalation timer", systemImage: "timer")
@@ -3174,7 +3561,8 @@ struct SpatialControlPanel: View {
                                     .monospacedDigit()
                                     .foregroundStyle(remaining <= 60 ? .red : .orange)
                             }
-                        } else if let remaining = casualty.deathTimeRemaining {
+                        } else if session.trainingMode.showsExactCountdowns,
+                                  let remaining = casualty.deathTimeRemaining {
                             HStack {
                                 Label("Scenario death threshold", systemImage: "exclamationmark.triangle.fill")
                                 Spacer()
@@ -3183,10 +3571,22 @@ struct SpatialControlPanel: View {
                                     .monospacedDigit()
                                     .foregroundStyle(.red)
                             }
+                        } else if !casualty.isDeceased {
+                            Label(
+                                casualty.deteriorationStage >= 3
+                                    ? "Critical fictional escalation threshold reached"
+                                    : "Time-critical condition — exact countdown hidden in assessed mode",
+                                systemImage: "exclamationmark.triangle.fill"
+                            )
+                            .font(.headline)
+                            .foregroundStyle(casualty.deteriorationStage >= 3 ? .red : .orange)
                         }
 
                         if !casualty.isDeceased && casualty.primaryAssessmentComplete {
                             CPRHoldControl(casualtyID: casualty.id)
+                                .id("cpr-\(casualty.id)-\(session.isPaused)")
+                                .allowsHitTesting(!session.isPaused)
+                                .opacity(session.isPaused ? 0.55 : 1)
                         } else if !casualty.isDeceased {
                             Label(
                                 "Complete the primary assessment to activate the simulated CPR target.",
@@ -3232,7 +3632,7 @@ struct SpatialControlPanel: View {
                         .buttonStyle(.borderedProminent)
                         .tint(priority.colour)
                         .opacity(casualty.assignedPriority == priority ? 1 : 0.72)
-                        .disabled(!casualty.primaryAssessmentComplete)
+                        .disabled(!casualty.primaryAssessmentComplete || session.isPaused)
                     }
                 }
             } else {
@@ -3242,17 +3642,21 @@ struct SpatialControlPanel: View {
                     Text(String(format: "%02d:%02d", Int(session.elapsed) / 60, Int(session.elapsed) % 60))
                         .monospacedDigit()
                 }
-                Text("Turn to survey the full scene automatically. Then look at a casualty or the fuel spill and pinch to select it.")
-                    .foregroundStyle(.secondary)
+                Text(
+                    session.trainingMode.showsGuidance
+                        ? "Turn to survey the full scene automatically. Then look at a casualty or the fuel spill and pinch to select it."
+                        : "Use the spatial scene, shared command board, and your assigned role to manage the incident."
+                )
+                .foregroundStyle(.secondary)
                 HStack {
                     Button { collaboration.submit(.communicateHazard) } label: {
                         Label(session.hazardCommunicated ? "Reported" : "Report hazard", systemImage: "radio")
                     }
-                    .disabled(!session.hazardIdentified || session.hazardCommunicated)
+                    .disabled(session.isPaused || !session.hazardIdentified || session.hazardCommunicated)
                     Button { collaboration.submit(.requestResources) } label: {
                         Label(session.resourceRequestSent ? "Requested" : "Resources", systemImage: "person.3.fill")
                     }
-                    .disabled(session.resourceRequestSent)
+                    .disabled(session.isPaused || session.resourceRequestSent)
                 }
                 .buttonStyle(.bordered)
                 if let conditionAlert = session.conditionAlert {
@@ -3280,6 +3684,100 @@ struct SpatialControlPanel: View {
     private func formatCountdown(_ time: TimeInterval) -> String {
         let totalSeconds = max(0, Int(time.rounded(.up)))
         return String(format: "%02d:%02d", totalSeconds / 60, totalSeconds % 60)
+    }
+}
+
+struct IncidentCommandBoardView: View {
+    @EnvironmentObject private var session: TrainingSession
+    @EnvironmentObject private var collaboration: IncidentCollaborationCoordinator
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Label("Shared casualty board", systemImage: "rectangle.3.group.fill")
+                    .font(.headline)
+                Spacer()
+                Text("\(session.taggedCount)/\(session.casualties.count) tagged")
+                    .font(.caption.bold().monospacedDigit())
+                    .foregroundStyle(.secondary)
+            }
+
+            ForEach(session.casualties) { casualty in
+                Button {
+                    collaboration.submit(.selectCasualty(casualty.id))
+                } label: {
+                    HStack(spacing: 12) {
+                        Image(systemName: statusIcon(for: casualty))
+                            .font(.title3)
+                            .foregroundStyle(casualty.conditionColour)
+                            .frame(width: 28)
+
+                        VStack(alignment: .leading, spacing: 3) {
+                            HStack(spacing: 6) {
+                                Text(casualty.name)
+                                    .font(.headline)
+                                if casualty.isDeteriorated && !casualty.isDeceased {
+                                    Text("REASSESS")
+                                        .font(.caption2.bold())
+                                        .foregroundStyle(.white)
+                                        .padding(.horizontal, 6)
+                                        .padding(.vertical, 2)
+                                        .background(.red, in: Capsule())
+                                }
+                            }
+                            Text(casualty.conditionLabel)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
+
+                        Spacer()
+
+                        Label(
+                            "\(casualty.completedAssessments.count)/\(Assessment.allCases.count)",
+                            systemImage: "checklist"
+                        )
+                        .font(.caption.bold().monospacedDigit())
+                        .foregroundStyle(.secondary)
+
+                        if let priority = casualty.assignedPriority {
+                            Text(priority.rawValue)
+                                .font(.caption.bold())
+                                .foregroundStyle(.white)
+                                .padding(.horizontal, 9)
+                                .padding(.vertical, 5)
+                                .background(priority.colour, in: Capsule())
+                                .accessibilityLabel("Priority \(priority.rawValue), \(priority.title)")
+                        } else {
+                            Text("UNTAGGED")
+                                .font(.caption2.bold())
+                                .foregroundStyle(.orange)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 5)
+                                .background(.orange.opacity(0.12), in: Capsule())
+                        }
+
+                        Image(systemName: "chevron.right")
+                            .font(.caption.bold())
+                            .foregroundStyle(.tertiary)
+                    }
+                    .padding(10)
+                    .contentShape(Rectangle())
+                    .background(.white.opacity(0.045), in: RoundedRectangle(cornerRadius: 12))
+                }
+                .buttonStyle(.plain)
+                .accessibilityHint("Open spatial assessment and triage controls for \(casualty.name)")
+            }
+        }
+        .padding(12)
+        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 16))
+    }
+
+    private func statusIcon(for casualty: Casualty) -> String {
+        if casualty.isDeceased { return "xmark.octagon.fill" }
+        if casualty.isReceivingCPR { return "heart.circle.fill" }
+        if casualty.isDeteriorated { return "exclamationmark.triangle.fill" }
+        return casualty.completedAssessments.isEmpty ? "person.crop.circle" : "checkmark.circle.fill"
     }
 }
 

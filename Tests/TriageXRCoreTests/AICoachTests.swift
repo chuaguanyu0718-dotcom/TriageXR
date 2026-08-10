@@ -13,6 +13,7 @@ struct AICoachTests {
         #expect(event.timestamp == "00:12")
         #expect(event.actorRole == ResponderRole.incidentCommander.title)
         #expect(event.cues == ["Fuel visible beside vehicle"])
+        #expect(request.trainingMode == TrainingMode.guided.title)
     }
 
     @Test
@@ -58,6 +59,7 @@ struct AICoachTests {
     private func makeRequest(evidence: [DecisionEvidence]) -> AICoachRequest {
         AICoachRequest(
             sessionID: UUID(uuidString: "00000000-0000-0000-0000-000000000001")!,
+            trainingMode: .guided,
             scenarioPace: .demo,
             score: ScoreBreakdown(
                 safety: 12,

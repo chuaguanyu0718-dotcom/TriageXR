@@ -48,6 +48,145 @@ enum ScenarioPace: String, CaseIterable, Identifiable, Codable, Sendable {
     }
 }
 
+enum TrainingMode: String, CaseIterable, Identifiable, Codable, Sendable {
+    case guided
+    case assessed
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .guided: "Guided practice"
+        case .assessed: "Assessed run"
+        }
+    }
+
+    var detail: String {
+        switch self {
+        case .guided:
+            "Shows the next recommended action, exact scenario countdowns, and the judge-demo progress path."
+        case .assessed:
+            "Removes step-by-step prompts and exact countdowns while retaining required spatial affordances and safety alerts."
+        }
+    }
+
+    var showsGuidance: Bool { self == .guided }
+    var showsExactCountdowns: Bool { self == .guided }
+}
+
+enum ResponseMilestone: String, CaseIterable, Identifiable, Codable, Hashable, Sendable {
+    case incidentStarted
+    case sceneSurveyed
+    case hazardIdentified
+    case firstCasualtyContact
+    case firstAssessment
+    case firstCorrectTag
+    case cprStarted
+    case hazardCommunicated
+    case resourcesRequested
+    case allCasualtiesTagged
+    case scenarioCompleted
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .incidentStarted: "Incident started"
+        case .sceneSurveyed: "360° survey complete"
+        case .hazardIdentified: "Hazard identified"
+        case .firstCasualtyContact: "First casualty contact"
+        case .firstAssessment: "First finding verified"
+        case .firstCorrectTag: "First correct tag"
+        case .cprStarted: "CPR coverage started"
+        case .hazardCommunicated: "Hazard reported"
+        case .resourcesRequested: "Resources requested"
+        case .allCasualtiesTagged: "All casualties tagged"
+        case .scenarioCompleted: "Scenario completed"
+        }
+    }
+}
+
+struct ResponseTempo: Codable, Equatable, Sendable {
+    private(set) var milestoneTimes: [ResponseMilestone: TimeInterval] = [:]
+
+    @discardableResult
+    mutating func mark(_ milestone: ResponseMilestone, at elapsed: TimeInterval) -> Bool {
+        guard milestoneTimes[milestone] == nil else { return false }
+        milestoneTimes[milestone] = max(0, elapsed)
+        return true
+    }
+
+    func elapsed(for milestone: ResponseMilestone) -> TimeInterval? {
+        milestoneTimes[milestone]
+    }
+
+    var completedMilestones: [ResponseMilestone] {
+        ResponseMilestone.allCases.filter { milestoneTimes[$0] != nil }
+    }
+}
+
+struct TrainingRunSummary: Identifiable, Codable, Equatable, Sendable {
+    let id: UUID
+    let completedAt: Date
+    let scenarioID: String
+    let scenarioVersion: Int
+    let trainingMode: TrainingMode
+    let scenarioPace: ScenarioPace
+    let exerciseElapsedSeconds: TimeInterval
+    let score: ScoreBreakdown
+    let responseTempo: ResponseTempo
+
+    init(
+        id: UUID = UUID(),
+        completedAt: Date = Date(),
+        scenarioID: String,
+        scenarioVersion: Int,
+        trainingMode: TrainingMode,
+        scenarioPace: ScenarioPace,
+        exerciseElapsedSeconds: TimeInterval,
+        score: ScoreBreakdown,
+        responseTempo: ResponseTempo
+    ) {
+        self.id = id
+        self.completedAt = completedAt
+        self.scenarioID = scenarioID
+        self.scenarioVersion = scenarioVersion
+        self.trainingMode = trainingMode
+        self.scenarioPace = scenarioPace
+        self.exerciseElapsedSeconds = max(0, exerciseElapsedSeconds)
+        self.score = score
+        self.responseTempo = responseTempo
+    }
+}
+
+struct TrainingHistoryArchive: Codable, Equatable, Sendable {
+    static let currentSchemaVersion = 1
+    static let maximumRunCount = 12
+
+    let schemaVersion: Int
+    private(set) var runs: [TrainingRunSummary]
+
+    init(schemaVersion: Int = Self.currentSchemaVersion, runs: [TrainingRunSummary] = []) {
+        self.schemaVersion = schemaVersion
+        self.runs = Array(runs.prefix(Self.maximumRunCount))
+    }
+
+    mutating func record(_ run: TrainingRunSummary) {
+        runs.removeAll { $0.id == run.id }
+        runs.insert(run, at: 0)
+        if runs.count > Self.maximumRunCount {
+            runs.removeLast(runs.count - Self.maximumRunCount)
+        }
+    }
+
+    var personalBest: Int? { runs.map(\.score.total).max() }
+
+    var averageScore: Int? {
+        guard !runs.isEmpty else { return nil }
+        return Int((Double(runs.reduce(0) { $0 + $1.score.total }) / Double(runs.count)).rounded())
+    }
+}
+
 enum SurveyCheckpoint: String, CaseIterable, Identifiable, Codable, Hashable, Sendable {
     case forward
     case leftFlank
@@ -796,13 +935,14 @@ struct AICoachEventPayload: Identifiable, Codable, Equatable, Sendable {
 }
 
 struct AICoachRequest: Codable, Equatable, Sendable {
-    static let currentSchemaVersion = 1
+    static let currentSchemaVersion = 2
     static let maximumEventCount = 80
     static let scenarioName = "Roadside multi-casualty coordination simulation"
 
     let schemaVersion: Int
     let sessionID: String
     let scenario: String
+    let trainingMode: String
     let scenarioPace: String
     let score: ScoreBreakdown
     let events: [AICoachEventPayload]
@@ -810,6 +950,7 @@ struct AICoachRequest: Codable, Equatable, Sendable {
     init(
         sessionID: UUID = UUID(),
         scenario: String = Self.scenarioName,
+        trainingMode: TrainingMode,
         scenarioPace: ScenarioPace,
         score: ScoreBreakdown,
         evidence: [DecisionEvidence]
@@ -817,6 +958,7 @@ struct AICoachRequest: Codable, Equatable, Sendable {
         schemaVersion = Self.currentSchemaVersion
         self.sessionID = sessionID.uuidString.lowercased()
         self.scenario = scenario
+        self.trainingMode = trainingMode.title
         self.scenarioPace = scenarioPace.title
         self.score = score
         events = Self.boundedEvents(evidence).map(AICoachEventPayload.init)
@@ -954,7 +1096,9 @@ enum AICoachValidationError: Error, Equatable {
 struct SharedIncidentSnapshot: Codable, Equatable, Sendable {
     let revision: Int
     let phase: ScenarioPhase
+    let trainingMode: TrainingMode
     let scenarioPace: ScenarioPace
+    let isPaused: Bool
     let casualties: [Casualty]
     let hazardIdentified: Bool
     let hazardCommunicated: Bool
@@ -964,6 +1108,7 @@ struct SharedIncidentSnapshot: Codable, Equatable, Sendable {
     let deteriorationTriggered: Bool
     let events: [SessionEvent]
     let decisionEvidence: [DecisionEvidence]
+    let responseTempo: ResponseTempo
     let elapsed: TimeInterval
     let conditionAlert: String?
 
@@ -985,7 +1130,9 @@ enum IncidentCommand: Codable, Sendable {
     case begin
     case end
     case reset
+    case setTrainingMode(TrainingMode)
     case setScenarioPace(ScenarioPace)
+    case setScenarioPaused(Bool)
     case inspectSurveyCheckpoint(SurveyCheckpoint)
     case recordSurveyCoverage([Int])
     case identifyHazard
@@ -1015,7 +1162,8 @@ enum IncidentCommand: Codable, Sendable {
              .beginCPR(let casualtyID),
              .endCPR(let casualtyID, _):
             casualtyID
-        case .begin, .end, .reset, .setScenarioPace, .inspectSurveyCheckpoint,
+        case .begin, .end, .reset, .setTrainingMode, .setScenarioPace,
+             .setScenarioPaused, .inspectSurveyCheckpoint,
              .recordSurveyCoverage, .identifyHazard, .communicateHazard, .requestResources,
              .closeCasualty:
             nil
@@ -1030,8 +1178,12 @@ enum IncidentCommand: Codable, Sendable {
             "end the incident"
         case .reset:
             "reset the incident"
+        case .setTrainingMode(let mode):
+            "set the training mode to \(mode.title)"
         case .setScenarioPace(let pace):
             "set the exercise pace to \(pace.title)"
+        case .setScenarioPaused(let paused):
+            paused ? "pause the incident clock" : "resume the incident clock"
         case .inspectSurveyCheckpoint(let checkpoint):
             "inspect the \(checkpoint.title.lowercased())"
         case .recordSurveyCoverage:
@@ -1060,8 +1212,12 @@ enum IncidentCommand: Codable, Sendable {
     func isPermitted(for role: ResponderRole) -> Bool {
         if role == .instructor { return true }
         switch self {
-        case .begin, .end, .reset, .setScenarioPace, .inspectSurveyCheckpoint, .recordSurveyCoverage, .identifyHazard, .communicateHazard, .requestResources:
+        case .begin, .end, .reset, .setTrainingMode, .setScenarioPace,
+             .inspectSurveyCheckpoint, .recordSurveyCoverage, .identifyHazard,
+             .communicateHazard, .requestResources:
             return role == .incidentCommander
+        case .setScenarioPaused:
+            return role == .incidentCommander || role == .instructor
         case .assignPriority:
             return role == .triageOfficer
         case .beginCPR, .endCPR:
@@ -1075,8 +1231,12 @@ enum IncidentCommand: Codable, Sendable {
 
     var permissionDescription: String {
         switch self {
-        case .begin, .end, .reset, .setScenarioPace, .inspectSurveyCheckpoint, .recordSurveyCoverage, .identifyHazard, .communicateHazard, .requestResources:
+        case .begin, .end, .reset, .setTrainingMode, .setScenarioPace,
+             .inspectSurveyCheckpoint, .recordSurveyCoverage, .identifyHazard,
+             .communicateHazard, .requestResources:
             "This action belongs to the Incident Commander."
+        case .setScenarioPaused:
+            "Pausing the exercise belongs to the Incident Commander or Instructor."
         case .assignPriority:
             "Priority assignment belongs to the Triage Officer."
         case .beginCPR, .endCPR:

@@ -19,12 +19,44 @@ struct CoreSmoke {
         precondition(coverage == SurveyCoverage.allBins)
         precondition(SurveyCoverage.completedCheckpoints(for: coverage) == SurveyCheckpoint.required)
 
-        let command = IncidentCommand.recordSurveyCoverage(coverage.sorted())
+        var tempo = ResponseTempo()
+        precondition(tempo.mark(.incidentStarted, at: 0))
+        precondition(tempo.mark(.sceneSurveyed, at: 12))
+        precondition(!tempo.mark(.sceneSurveyed, at: 15))
+        precondition(tempo.elapsed(for: .sceneSurveyed) == 12)
+
+        var history = TrainingHistoryArchive()
+        history.record(
+            TrainingRunSummary(
+                scenarioID: scenario.id,
+                scenarioVersion: scenario.version,
+                trainingMode: .guided,
+                scenarioPace: .demo,
+                exerciseElapsedSeconds: 75,
+                score: ScoreBreakdown(
+                    safety: 20,
+                    assessment: 25,
+                    triage: 25,
+                    treatment: 15,
+                    communication: 15
+                ),
+                responseTempo: tempo
+            )
+        )
+        precondition(history.personalBest == 100)
+        let historyData = try JSONEncoder().encode(history)
+        let decodedHistory = try JSONDecoder().decode(
+            TrainingHistoryArchive.self,
+            from: historyData
+        )
+        precondition(decodedHistory == history)
+
+        let command = IncidentCommand.setScenarioPaused(true)
         let encoded = try JSONEncoder().encode(command)
         let decoded = try JSONDecoder().decode(IncidentCommand.self, from: encoded)
         precondition(decoded.actionTitle == command.actionTitle)
 
-        print("Core smoke checks passed: scenario, 360° coverage, and shared command round-trip.")
+        print("Core smoke checks passed: scenario, 360° coverage, tempo, history, and shared command round-trip.")
     }
 
     private static func sample(at timestamp: TimeInterval, yawDegrees: Float) -> SceneSurveySample {

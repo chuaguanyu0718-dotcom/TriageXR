@@ -123,6 +123,7 @@ final class AICoachCoordinator: ObservableObject {
         let request = AICoachRequest(
             sessionID: requestSessionID,
             scenario: "\(session.scenario.title) · content v\(session.scenario.version)",
+            trainingMode: session.trainingMode,
             scenarioPace: session.scenarioPace,
             score: session.score,
             evidence: session.decisionEvidence
@@ -163,6 +164,6 @@ final class AICoachCoordinator: ObservableObject {
 
     private static func signature(for session: TrainingSession) -> String {
         let lastID = session.decisionEvidence.last?.id.uuidString.lowercased() ?? "none"
-        return "\(session.decisionEvidence.count)-\(lastID)-\(session.score.total)-\(session.scenarioPace.rawValue)"
+        return "\(session.decisionEvidence.count)-\(lastID)-\(session.score.total)-\(session.trainingMode.rawValue)-\(session.scenarioPace.rawValue)"
     }
 }
