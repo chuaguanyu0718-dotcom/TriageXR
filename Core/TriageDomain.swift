@@ -143,13 +143,13 @@ enum Assessment: String, CaseIterable, Identifiable, Codable, Sendable {
     var spatialInstruction: String {
         switch self {
         case .response:
-            "Reach to the shoulder marker and hold for one second."
+            "Touch the casualty's shoulder and hold for one second while checking for a response."
         case .breathing:
-            "Hold an open palm above the chest marker for two seconds."
+            "Hold an open palm just above the chest and observe breathing for two seconds."
         case .perfusion:
-            "Pinch at the wrist marker and hold for two seconds."
+            "Place a pinch at the casualty's wrist and hold for two seconds to check perfusion."
         case .injuries:
-            "Place your fingertips over the injury marker and hold for one second."
+            "Move your fingertips deliberately over the visible injury area and hold for one second."
         }
     }
 }
@@ -915,6 +915,11 @@ enum SpatialAssessmentCatalog {
         "casualty-b": SpatialVector3(x: 0.1, y: -1.08, z: -3.15),
         "casualty-c": SpatialVector3(x: 1.55, y: -1.08, z: -2.2)
     ]
+    private static let casualtyYaws: [String: Float] = [
+        "casualty-a": -0.34,
+        "casualty-b": 0.18,
+        "casualty-c": 0.52
+    ]
 
     static func target(casualtyID: String, assessment: Assessment) -> SpatialAssessmentTarget? {
         guard let base = casualtyPositions[casualtyID] else { return nil }
@@ -956,13 +961,20 @@ enum SpatialAssessmentCatalog {
             usesWrist = false
         }
 
+        let yaw = casualtyYaws[casualtyID, default: 0]
+        let rotatedOffset = SpatialVector3(
+            x: offset.x * cos(yaw) + offset.z * sin(yaw),
+            y: offset.y,
+            z: -offset.x * sin(yaw) + offset.z * cos(yaw)
+        )
+
         return SpatialAssessmentTarget(
             casualtyID: casualtyID,
             assessment: assessment,
             centre: SpatialVector3(
-                x: base.x + offset.x,
-                y: base.y + offset.y,
-                z: base.z + offset.z
+                x: base.x + rotatedOffset.x,
+                y: base.y + rotatedOffset.y,
+                z: base.z + rotatedOffset.z
             ),
             radius: radius,
             requiredDuration: duration,

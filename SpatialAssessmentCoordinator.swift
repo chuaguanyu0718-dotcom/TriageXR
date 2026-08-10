@@ -28,7 +28,7 @@ enum HandTrackingStatus: Equatable {
         case .starting:
             "Waiting for Vision Pro hand-anchor data."
         case .tracking:
-            "Clinical findings unlock only after the required hand pose is sustained at the spatial marker."
+            "Clinical findings unlock after the required hand action is sustained at the correct anatomical area."
         case .simulator:
             "Pinch the highlighted 3D marker to provide simulated spatial evidence."
         case .unavailable(let message):
@@ -48,6 +48,8 @@ final class SpatialAssessmentCoordinator: ObservableObject {
     @Published private(set) var activeAssessment: Assessment?
     @Published private(set) var progress: Double = 0
     @Published private(set) var proximityMetres: Double?
+    @Published private(set) var devicePosition: SIMD3<Float>?
+    @Published private(set) var deviceYaw: Float = 0
 
     private weak var trainingSession: TrainingSession?
     private var submitCommand: ((IncidentCommand) -> Void)?
@@ -124,6 +126,8 @@ final class SpatialAssessmentCoordinator: ObservableObject {
         activeAssessment = nil
         progress = 0
         proximityMetres = nil
+        devicePosition = nil
+        deviceYaw = 0
         lastSubmittedKey = nil
         activeTargetKey = nil
         activeHand = nil
@@ -146,17 +150,23 @@ final class SpatialAssessmentCoordinator: ObservableObject {
     private func observeHeadDirection() {
         guard let trainingSession,
               trainingSession.phase == .active,
-              !trainingSession.sceneSurveyed,
               let anchor = worldProvider.queryDeviceAnchor(atTimestamp: CACurrentMediaTime()),
               anchor.isTracked else { return }
 
         let transform = anchor.originFromAnchorTransform
+        devicePosition = SIMD3<Float>(
+            transform.columns.3.x,
+            transform.columns.3.y,
+            transform.columns.3.z
+        )
+        guard !trainingSession.sceneSurveyed else { return }
         let forward = -SIMD3<Float>(
             transform.columns.2.x,
             transform.columns.2.y,
             transform.columns.2.z
         )
         let yaw = atan2(forward.x, forward.z)
+        deviceYaw = yaw
         guard let initialSurveyYaw else {
             self.initialSurveyYaw = yaw
             submitSurveySector(.forward)
@@ -173,6 +183,22 @@ final class SpatialAssessmentCoordinator: ObservableObject {
         default: sector = .rear
         }
         submitSurveySector(sector)
+    }
+
+    func isWithinTreatmentReach(
+        of targetPosition: SIMD3<Float>,
+        maximumDistance: Float = 1.25
+    ) -> Bool {
+#if targetEnvironment(simulator)
+        true
+#else
+        guard let devicePosition else { return false }
+        let horizontalOffset = SIMD2<Float>(
+            devicePosition.x - targetPosition.x,
+            devicePosition.z - targetPosition.z
+        )
+        return simd_length(horizontalOffset) <= maximumDistance
+#endif
     }
 
     private func submitSurveySector(_ sector: SurveyCheckpoint) {

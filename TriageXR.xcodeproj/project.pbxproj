@@ -32,15 +32,17 @@
 		};
 		A10000000000000000000003 = {
 			isa = PBXGroup;
-			children = (A10000000000000000000009, A30000000000000000000001, A20000000000000000000001, A20000000000000000000003, A20000000000000000000004, A20000000000000000000005, A10000000000000000000016, A1000000000000000000000B, A10000000000000000000004);
+			children = (A10000000000000000000009, A40000000000000000000001, A30000000000000000000001, A20000000000000000000001, A20000000000000000000003, A20000000000000000000004, A20000000000000000000005, A10000000000000000000016, A1000000000000000000000B, A10000000000000000000004);
 			sourceTree = "<group>";
 		};
 		A10000000000000000000004 /* Products */ = { isa = PBXGroup; children = (A10000000000000000000005); name = Products; sourceTree = "<group>"; };
 		A10000000000000000000005 /* TriageXR.app */ = { isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = TriageXR.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		A10000000000000000000006 /* Sources */ = { isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (A1000000000000000000000A, A30000000000000000000002, A20000000000000000000006, A20000000000000000000007, A20000000000000000000008); runOnlyForDeploymentPostprocessing = 0; };
+		A10000000000000000000006 /* Sources */ = { isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (A1000000000000000000000A, A40000000000000000000002, A30000000000000000000002, A20000000000000000000006, A20000000000000000000007, A20000000000000000000008); runOnlyForDeploymentPostprocessing = 0; };
 		A10000000000000000000007 /* Frameworks */ = { isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
 		A10000000000000000000008 /* Resources */ = { isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (A1000000000000000000001B, A1000000000000000000001C, A1000000000000000000001D, A1000000000000000000001E, A1000000000000000000000C); runOnlyForDeploymentPostprocessing = 0; };
 		A10000000000000000000009 /* ContentView.swift */ = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
+		A40000000000000000000001 /* IncidentAudioCoordinator.swift */ = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IncidentAudioCoordinator.swift; sourceTree = "<group>"; };
+		A40000000000000000000002 /* IncidentAudioCoordinator.swift in Sources */ = { isa = PBXBuildFile; fileRef = A40000000000000000000001; };
 		A10000000000000000000016 /* Models */ = { isa = PBXGroup; children = (A10000000000000000000017, A10000000000000000000018, A10000000000000000000019, A1000000000000000000001A); path = Models; sourceTree = "<group>"; };
 		A10000000000000000000017 /* CasualtyAlex.usdz */ = { isa = PBXFileReference; lastKnownFileType = file.usdz; path = CasualtyAlex.usdz; sourceTree = "<group>"; };
 		A10000000000000000000018 /* CasualtyJordan.usdz */ = { isa = PBXFileReference; lastKnownFileType = file.usdz; path = CasualtyJordan.usdz; sourceTree = "<group>"; };

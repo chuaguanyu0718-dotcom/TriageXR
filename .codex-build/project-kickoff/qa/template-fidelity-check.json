@@ -1,0 +1,13 @@
+{
+  "status": "pass",
+  "checkedAt": "2026-08-10T02:44:51.951Z",
+  "workspace": "/Users/shreeraj/projects/triagexr/TriageXR/.codex-build/project-kickoff",
+  "finalPptx": "/Users/shreeraj/projects/triagexr/TriageXR/TriageXR-Spatial-Hack-AI.pptx",
+  "starterPptx": "/Users/shreeraj/projects/triagexr/TriageXR/.codex-build/project-kickoff/template-starter.pptx",
+  "mapPath": "/Users/shreeraj/projects/triagexr/TriageXR/.codex-build/project-kickoff/template-frame-map.json",
+  "starterLayoutDir": "/Users/shreeraj/projects/triagexr/TriageXR/.codex-build/project-kickoff/template-starter-layout",
+  "finalLayoutDir": "/Users/shreeraj/projects/triagexr/TriageXR/.codex-build/project-kickoff/final-render",
+  "editDir": "/Users/shreeraj/projects/triagexr/TriageXR/.codex-build/project-kickoff",
+  "issueCount": 0,
+  "issues": []
+}

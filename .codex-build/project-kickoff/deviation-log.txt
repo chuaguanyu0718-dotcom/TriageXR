@@ -1,0 +1,1 @@
+Slides 2 and 6 replace the inherited image frame with user-provided project-relevant images while preserving its geometry and crop. No visual-system departures are planned. Slide 9 retains the inherited roadmap table and edits its text rather than introducing a new diagram.

@@ -1,0 +1,1 @@
+Project claims and product behavior are sourced from the local TriageXR README and Swift implementation. User-supplied training-site photograph and adult triage chart are used on slides 2 and 6. No external web claims or assets are used.
