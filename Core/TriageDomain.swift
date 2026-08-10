@@ -233,7 +233,7 @@ enum SurveyCoverage {
 /// valid heading becomes the trainee's forward direction, so the exercise works no
 /// matter which way the immersive space opens.
 struct SceneSurveyEngine: Sendable {
-    private static let dwellDuration: TimeInterval = 0.8
+    private let dwellDuration: TimeInterval
     private static let movementThreshold: Float = 20 * .pi / 180
     private static let minimumHorizontalMagnitude: Float = 0.45
 
@@ -243,6 +243,10 @@ struct SceneSurveyEngine: Sendable {
     private var locallyCompleted: Set<SurveyCheckpoint> = []
     private var hostCompleted: Set<SurveyCheckpoint> = []
     private var locallyCoveredBins: Set<Int> = []
+
+    init(dwellDuration: TimeInterval = 0.8) {
+        self.dwellDuration = max(0.5, dwellDuration)
+    }
 
     mutating func synchronizeCompleted(_ completed: Set<SurveyCheckpoint>) {
         hostCompleted = completed
@@ -308,11 +312,11 @@ struct SceneSurveyEngine: Sendable {
             )
         }
 
-        let progress = min(1, max(0, (sample.timestamp - stableSince) / Self.dwellDuration))
+        let progress = min(1, max(0, (sample.timestamp - stableSince) / dwellDuration))
         guard progress >= 1 else {
             return SceneSurveyObservation(
                 checkpoint: checkpoint,
-                progress: 0,
+                progress: progress <= 0.26 ? 0 : progress,
                 isStable: true,
                 newlyCompletedCheckpoint: nil,
                 newlyCoveredBins: []

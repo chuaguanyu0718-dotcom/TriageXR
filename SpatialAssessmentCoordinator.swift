@@ -50,6 +50,11 @@ final class SpatialAssessmentCoordinator: ObservableObject {
     @Published private(set) var proximityMetres: Double?
     @Published private(set) var devicePosition: SIMD3<Float>?
     @Published private(set) var deviceYaw: Float = 0
+    @Published private(set) var surveyReferencePosition: SIMD3<Float>?
+    @Published private(set) var surveyReferenceYaw: Float = 0
+    @Published private(set) var activeSurveyCheckpoint: SurveyCheckpoint?
+    @Published private(set) var surveyDwellProgress: Double = 0
+    @Published private(set) var surveyDirectionIsStable = false
 
     private weak var trainingSession: TrainingSession?
     private var submitCommand: ((IncidentCommand) -> Void)?
@@ -57,10 +62,9 @@ final class SpatialAssessmentCoordinator: ObservableObject {
     private let provider = HandTrackingProvider()
     private let worldProvider = WorldTrackingProvider()
     private var engine = SpatialAssessmentEngine()
+    private var surveyEngine = SceneSurveyEngine(dwellDuration: 1.5)
     private var trackingTask: Task<Void, Never>?
     private var surveyTask: Task<Void, Never>?
-    private var initialSurveyYaw: Float?
-    private var observedSurveySectors: Set<SurveyCheckpoint> = []
     private var lastSubmittedKey: String?
     private var activeTargetKey: String?
     private var activeHand: HandAnchor.Chirality?
@@ -128,12 +132,16 @@ final class SpatialAssessmentCoordinator: ObservableObject {
         proximityMetres = nil
         devicePosition = nil
         deviceYaw = 0
+        surveyReferencePosition = nil
+        surveyReferenceYaw = 0
+        activeSurveyCheckpoint = nil
+        surveyDwellProgress = 0
+        surveyDirectionIsStable = false
         lastSubmittedKey = nil
         activeTargetKey = nil
         activeHand = nil
         status = .idle
-        initialSurveyYaw = nil
-        observedSurveySectors = []
+        surveyEngine = SceneSurveyEngine(dwellDuration: 1.5)
     }
 
     private func startSurveyTracking() {
@@ -165,24 +173,26 @@ final class SpatialAssessmentCoordinator: ObservableObject {
             transform.columns.2.y,
             transform.columns.2.z
         )
-        let yaw = atan2(forward.x, forward.z)
+        let yaw = atan2(forward.x, -forward.z)
         deviceYaw = yaw
-        guard let initialSurveyYaw else {
-            self.initialSurveyYaw = yaw
-            submitSurveySector(.forward)
-            return
+        if surveyReferencePosition == nil {
+            surveyReferencePosition = devicePosition
+            surveyReferenceYaw = yaw
         }
 
-        let delta = normalizedAngle(yaw - initialSurveyYaw)
-        let degrees = delta * 180 / .pi
-        let sector: SurveyCheckpoint
-        switch degrees {
-        case -45..<45: sector = .forward
-        case 45..<135: sector = .leftFlank
-        case -135 ..< -45: sector = .rightFlank
-        default: sector = .rear
+        surveyEngine.synchronizeCompleted(trainingSession.surveyedCheckpoints)
+        let observation = surveyEngine.observe(
+            sample: SceneSurveySample(
+                timestamp: CACurrentMediaTime(),
+                forward: SpatialVector3(x: forward.x, y: forward.y, z: forward.z)
+            )
+        )
+        activeSurveyCheckpoint = observation.checkpoint
+        surveyDwellProgress = observation.progress
+        surveyDirectionIsStable = observation.isStable
+        if let completed = observation.newlyCompletedCheckpoint {
+            submitCommand?(.inspectSurveyCheckpoint(completed))
         }
-        submitSurveySector(sector)
     }
 
     func isWithinTreatmentReach(
@@ -199,18 +209,6 @@ final class SpatialAssessmentCoordinator: ObservableObject {
         )
         return simd_length(horizontalOffset) <= maximumDistance
 #endif
-    }
-
-    private func submitSurveySector(_ sector: SurveyCheckpoint) {
-        guard observedSurveySectors.insert(sector).inserted else { return }
-        submitCommand?(.inspectSurveyCheckpoint(sector))
-    }
-
-    private func normalizedAngle(_ angle: Float) -> Float {
-        var result = angle
-        while result > .pi { result -= 2 * .pi }
-        while result < -.pi { result += 2 * .pi }
-        return result
     }
 
     func simulatorVerify(_ assessment: Assessment, casualtyID: String) {

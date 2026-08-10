@@ -36,7 +36,8 @@ struct TriageXRApp: App {
                 .environmentObject(spatialAssessment)
                 .environmentObject(aiCoach)
         }
-        .defaultSize(width: 920, height: 720)
+        .defaultSize(width: 1120, height: 840)
+        .windowResizability(.contentSize)
 
         ImmersiveSpace(id: "TriageScene") {
             ImmersiveTriageView()
@@ -67,6 +68,19 @@ extension Casualty {
         if isReceivingCPR { return .green }
         if deteriorationProfile.requiresCPR { return health <= 25 ? .red : .orange }
         return health <= 50 ? .orange : .blue
+    }
+}
+
+private extension SurveyCheckpoint {
+    var attachmentID: String { "survey-marker-\(rawValue)" }
+
+    var yawOffset: Float {
+        switch self {
+        case .forward: 0
+        case .rightFlank: .pi / 2
+        case .rear: .pi
+        case .leftFlank: -.pi / 2
+        }
     }
 }
 
@@ -1372,7 +1386,6 @@ struct BriefingRow: View {
 struct SurveyProgressView: View {
     let completed: Set<SurveyCheckpoint>
     let simulatorMode: Bool
-    let inspectAction: (SurveyCheckpoint) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -1385,28 +1398,11 @@ struct SurveyProgressView: View {
                     .foregroundStyle(.secondary)
             }
 
-            HStack(spacing: 8) {
-                ForEach(SurveyCheckpoint.allCases) { checkpoint in
-                    let isComplete = completed.contains(checkpoint)
-                    Button { inspectAction(checkpoint) } label: {
-                        Label(
-                            checkpoint.shortTitle,
-                            systemImage: isComplete ? "checkmark.circle.fill" : "circle.dashed"
-                        )
-                        .font(.caption.bold())
-                        .frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(.bordered)
-                    .tint(isComplete ? .green : .cyan)
-                    .disabled(isComplete || !simulatorMode)
-                }
-            }
-
             if !SurveyCheckpoint.required.isSubset(of: completed) {
                 Text(
                     simulatorMode
-                        ? "Simulator: use these compact sector controls to test survey completion."
-                        : "Turn naturally through the full scene. Headset direction is recorded automatically."
+                        ? "Simulator: select each floating checkpoint to test the 360° survey."
+                        : "Turn to each floating checkpoint and hold your gaze until it becomes a green check."
                 )
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -1414,6 +1410,83 @@ struct SurveyProgressView: View {
         }
         .padding(12)
         .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 16))
+    }
+}
+
+struct SurveyCheckpointMarker: View {
+    @EnvironmentObject private var session: TrainingSession
+    @EnvironmentObject private var collaboration: IncidentCollaborationCoordinator
+    @EnvironmentObject private var spatialAssessment: SpatialAssessmentCoordinator
+    let checkpoint: SurveyCheckpoint
+
+    private var isComplete: Bool {
+        session.surveyedCheckpoints.contains(checkpoint)
+    }
+
+    private var isActive: Bool {
+        spatialAssessment.activeSurveyCheckpoint == checkpoint && !isComplete
+    }
+
+    private var progress: Double {
+        isActive ? spatialAssessment.surveyDwellProgress : 0
+    }
+
+    var body: some View {
+        Button {
+            guard spatialAssessment.status == .simulator, !isComplete else { return }
+            collaboration.submit(.inspectSurveyCheckpoint(checkpoint))
+        } label: {
+            VStack(spacing: 8) {
+                ZStack {
+                    Circle()
+                        .stroke(isComplete ? Color.green.opacity(0.35) : Color.white.opacity(0.35), lineWidth: 6)
+                    Circle()
+                        .trim(from: 0, to: isComplete ? 1 : progress)
+                        .stroke(
+                            isComplete ? Color.green : Color.cyan,
+                            style: StrokeStyle(lineWidth: 8, lineCap: .round)
+                        )
+                        .rotationEffect(.degrees(-90))
+                    Image(systemName: isComplete ? "checkmark" : checkpoint.markerIcon)
+                        .font(.system(size: 34, weight: .bold))
+                        .foregroundStyle(isComplete ? .green : .white)
+                }
+                .frame(width: 82, height: 82)
+
+                Text(isComplete ? "Checked" : checkpoint.shortTitle)
+                    .font(.headline)
+                if isActive && !spatialAssessment.surveyDirectionIsStable {
+                    Text("Hold steady")
+                        .font(.caption.bold())
+                        .foregroundStyle(.orange)
+                } else if !isComplete {
+                    Text("Look and hold")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .frame(width: 150, height: 145)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 28))
+            .overlay {
+                RoundedRectangle(cornerRadius: 28)
+                    .stroke(isComplete ? Color.green : isActive ? Color.cyan : Color.white.opacity(0.25), lineWidth: 2)
+            }
+            .shadow(color: isComplete ? .green.opacity(0.3) : .black.opacity(0.25), radius: 18)
+        }
+        .buttonStyle(.plain)
+        .allowsHitTesting(spatialAssessment.status == .simulator && !isComplete)
+        .accessibilityLabel("\(checkpoint.title), \(isComplete ? "complete" : "look and hold")")
+    }
+}
+
+private extension SurveyCheckpoint {
+    var markerIcon: String {
+        switch self {
+        case .forward: "arrow.up"
+        case .rightFlank: "arrow.right"
+        case .rear: "arrow.down"
+        case .leftFlank: "arrow.left"
+        }
     }
 }
 
@@ -1598,6 +1671,7 @@ struct AfterActionReviewView: View {
             }
             .padding(30)
         }
+        .frame(minWidth: 1080, minHeight: 780)
         .task(id: coachingTaskID) {
             await aiCoach.generate(for: session)
         }
@@ -2196,6 +2270,12 @@ struct ImmersiveTriageView: View {
                 inventory.position = [-1.02, 0.38, -1.15]
                 content.add(inventory)
             }
+            for checkpoint in SurveyCheckpoint.allCases {
+                if let marker = attachments.entity(for: checkpoint.attachmentID) {
+                    placeSurveyMarker(marker, for: checkpoint)
+                    content.add(marker)
+                }
+            }
         } update: { content, attachments in
             updateScene(content: content)
             if let controls = attachments.entity(for: "controls") {
@@ -2205,6 +2285,12 @@ struct ImmersiveTriageView: View {
             if let inventory = attachments.entity(for: "inventory"), inventory.parent == nil {
                 inventory.position = [-1.02, 0.38, -1.15]
                 content.add(inventory)
+            }
+            for checkpoint in SurveyCheckpoint.allCases {
+                guard let marker = attachments.entity(for: checkpoint.attachmentID) else { continue }
+                placeSurveyMarker(marker, for: checkpoint)
+                marker.isEnabled = session.phase == .active
+                if marker.parent == nil { content.add(marker) }
             }
         } attachments: {
             Attachment(id: "controls") {
@@ -2218,6 +2304,14 @@ struct ImmersiveTriageView: View {
                     replenishAction: { collaboration.submit(.replenishInventory) }
                 )
                 .environmentObject(session)
+            }
+            ForEach(SurveyCheckpoint.allCases) { checkpoint in
+                Attachment(id: checkpoint.attachmentID) {
+                    SurveyCheckpointMarker(checkpoint: checkpoint)
+                        .environmentObject(session)
+                        .environmentObject(collaboration)
+                        .environmentObject(spatialAssessment)
+                }
             }
         }
         .gesture(
@@ -2312,6 +2406,18 @@ struct ImmersiveTriageView: View {
         case "casualty-c": [0.75, -0.25, -1.9]
         default: [0, 0.55, -1.35]
         }
+    }
+
+    private func placeSurveyMarker(_ marker: Entity, for checkpoint: SurveyCheckpoint) {
+        let origin = spatialAssessment.surveyReferencePosition ?? SIMD3<Float>(0, 1.55, 0)
+        let angle = spatialAssessment.surveyReferenceYaw + checkpoint.yawOffset
+        let radius: Float = 2.7
+        marker.position = [
+            origin.x + sin(angle) * radius,
+            origin.y - 0.05,
+            origin.z - cos(angle) * radius
+        ]
+        marker.orientation = simd_quatf(angle: angle, axis: [0, 1, 0])
     }
 
     private func finishScenario() {
@@ -3114,11 +3220,7 @@ struct SpatialControlPanel: View {
                 if !session.sceneSurveyed {
                     SurveyProgressView(
                         completed: session.surveyedCheckpoints,
-                        simulatorMode: spatialAssessment.status == .simulator,
-                        inspectAction: { checkpoint in
-                            guard spatialAssessment.status == .simulator else { return }
-                            collaboration.submit(.inspectSurveyCheckpoint(checkpoint))
-                        }
+                        simulatorMode: spatialAssessment.status == .simulator
                     )
                 }
             }
