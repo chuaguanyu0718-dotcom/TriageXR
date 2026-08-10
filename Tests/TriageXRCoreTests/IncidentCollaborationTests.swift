@@ -11,6 +11,10 @@ struct IncidentCollaborationTests {
         #expect(!IncidentCommand.recordSurveyCoverage([0, 1]).isPermitted(for: .airwayResponder))
         #expect(IncidentCommand.setScenarioPace(.demo).isPermitted(for: .incidentCommander))
         #expect(!IncidentCommand.setScenarioPace(.demo).isPermitted(for: .triageOfficer))
+        #expect(IncidentCommand.setTrainingMode(.assessed).isPermitted(for: .incidentCommander))
+        #expect(!IncidentCommand.setTrainingMode(.assessed).isPermitted(for: .triageOfficer))
+        #expect(IncidentCommand.setScenarioPaused(true).isPermitted(for: .incidentCommander))
+        #expect(!IncidentCommand.setScenarioPaused(true).isPermitted(for: .triageOfficer))
 
         #expect(IncidentCommand.assignPriority("casualty-a", .p1).isPermitted(for: .triageOfficer))
         #expect(!IncidentCommand.assignPriority("casualty-a", .p1).isPermitted(for: .airwayResponder))
@@ -30,7 +34,9 @@ struct IncidentCollaborationTests {
             .begin,
             .end,
             .reset,
+            .setTrainingMode(.assessed),
             .setScenarioPace(.demo),
+            .setScenarioPaused(true),
             .inspectSurveyCheckpoint(.leftFlank),
             .recordSurveyCoverage([11, 0, 1]),
             .identifyHazard,
@@ -104,7 +110,9 @@ struct IncidentCollaborationTests {
             .begin,
             .end,
             .reset,
+            .setTrainingMode(.guided),
             .setScenarioPace(.realtime),
+            .setScenarioPaused(false),
             .inspectSurveyCheckpoint(.rear),
             .recordSurveyCoverage([5, 6, 7]),
             .identifyHazard,
@@ -185,7 +193,9 @@ struct IncidentCollaborationTests {
         let snapshot = SharedIncidentSnapshot(
             revision: 4,
             phase: .active,
+            trainingMode: .assessed,
             scenarioPace: .demo,
+            isPaused: true,
             casualties: [casualty],
             hazardIdentified: true,
             hazardCommunicated: false,
@@ -195,6 +205,7 @@ struct IncidentCollaborationTests {
             deteriorationTriggered: false,
             events: [],
             decisionEvidence: [evidence, systemEvidence],
+            responseTempo: responseTempo(at: 12),
             elapsed: 12,
             conditionAlert: nil
         )
@@ -207,6 +218,8 @@ struct IncidentCollaborationTests {
             return
         }
         #expect(decodedSnapshot == snapshot)
+        #expect(decodedSnapshot.trainingMode == .assessed)
+        #expect(decodedSnapshot.isPaused)
         #expect(decodedSnapshot.scenarioPace == .demo)
         #expect(decodedSnapshot.sceneSurveyed)
         #expect(decodedSnapshot.surveyedCheckpoints == SurveyCheckpoint.required)
@@ -216,6 +229,7 @@ struct IncidentCollaborationTests {
         #expect(decodedSnapshot.decisionEvidence.last?.actorRole == nil)
         #expect(decodedSnapshot.decisionEvidence.last?.outcome == .scenarioUpdate)
         #expect(decodedSnapshot.decisionEvidence.last?.recommendedAction == "Reassess immediately.")
+        #expect(decodedSnapshot.responseTempo.elapsed(for: .hazardIdentified) == 12)
     }
 
     @Test
@@ -242,5 +256,12 @@ struct IncidentCollaborationTests {
             SurveyCoverage.completedCheckpoints(for: SurveyCoverage.allBins)
                 == SurveyCheckpoint.required
         )
+    }
+
+    private func responseTempo(at elapsed: TimeInterval) -> ResponseTempo {
+        var tempo = ResponseTempo()
+        tempo.mark(.incidentStarted, at: 0)
+        tempo.mark(.hazardIdentified, at: elapsed)
+        return tempo
     }
 }

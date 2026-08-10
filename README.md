@@ -17,6 +17,7 @@ See [TRAINING_SCOPE.md](TRAINING_SCOPE.md) for measured outcomes, exclusions, an
 The experience follows the product storyboard:
 
 1. **Briefing:** Read the scenario, role, dispatch information, and objectives in a Window.
+   Choose Guided practice for live prompts or Assessed run for reduced coaching, then select the exercise pace.
 2. **Entry:** Choose Enter Incident.
    The briefing Window closes and the mixed Immersive Space opens.
 3. **Scene survey:** Three casualties, two vehicles, and one fuel hazard appear around the trainee.
@@ -36,6 +37,12 @@ The yellow fuel spill is interactive.
 After identifying it, use the incident panel to report it and request resources.
 
 ## Extraordinary demo features
+
+- **Adaptive training modes:** Guided practice exposes the next recommended action, judge path, and exact fictional countdowns. Assessed run removes those coaching aids while preserving spatial affordances, safety alerts, deterministic scoring, and the same evidence standard.
+- **Host-authoritative instructor control:** The Incident Commander or Instructor can pause and resume the shared incident. Pausing freezes exercise time, deterioration, and treatment-credit clocks for every participant and releases active simulated CPR holds so coverage cannot resume without a deliberate new hold.
+- **Live spatial command board:** The in-scene panel continuously summarizes all casualties, verified-assessment progress, triage tags, deterioration, CPR coverage, and reassessment needs. Any participant can open a casualty from the shared board while operational writes still obey role permissions.
+- **Response-tempo analytics:** First-occurrence milestones—including survey completion, hazard recognition, casualty contact, verified assessment, correct tagging, CPR, communications, and scenario completion—are captured from the authoritative exercise clock and shown in the debrief without presenting them as clinical thresholds.
+- **Persistent improvement loop:** The device retains a bounded history of the latest 12 completed runs, with personal best, average score, mode, pace, and response tempo. Full instructor JSON export is now schema v2 and includes training mode and milestone telemetry.
 
 - **Evidence-based replay:** Every material action captures the acting role, visible cues, causal outcome, consequence, and a spatial incident snapshot.
   Failed and urgent events also include a concrete next best action.
@@ -59,7 +66,7 @@ After identifying it, use the incident panel to report it and request resources.
   Simulated CPR coverage credit uses real hold duration, while Realtime remains available from the briefing.
   The hold represents continuous team coverage and does not measure physical compression rate, depth, or recoil.
 - **Versioned training content and instructor export:** The scenario is a validated, Codable definition with versioned objectives and casualty templates rather than session-controller constants.
-  The after-action review exports a JSON instructor report containing the score, competency evidence, 12-segment survey coverage, casualty outcomes, event log, replay evidence, scenario version, and training boundary.
+  The after-action review exports a JSON instructor report containing the score, competency evidence, response tempo, training mode, 12-segment survey coverage, casualty outcomes, event log, replay evidence, scenario version, and training boundary.
 - **Demo confidence:** The briefing shows spatial-runtime, asset, coach, and incident-mode readiness before entry.
   Original earcons confirm survey progress, survey completion, and hazard recognition without replacing the visible state.
 
@@ -81,7 +88,8 @@ GitHub Actions runs those checks plus relay validation for every pull request.
    Response and injury checks use fingertip placement, breathing requires a sustained open hand over the chest, and perfusion requires a sustained fingertip pinch at the wrist.
 5. Let the Airway Responder maintain the red CPR target for Jordan while the Triage Officer assigns priorities from the verified findings.
    Describe this as simulated CPR coverage for coordination training, not physical CPR-quality assessment.
-6. End the scenario, review the competency summary, and use the replay control to step through successful, failed, corrected, and system-generated events.
+6. Pause and resume once from the host to demonstrate synchronized instructor control, then end the scenario and review the score, response-tempo panel, competency summary, and personal improvement record.
+   Use the replay control to step through successful, failed, corrected, and system-generated events.
    Each stop shows the responsible role, evidence available at that moment, causal explanation, consequence, next best action when relevant, and reconstructed incident state.
    Export the instructor report to retain the full evidence package outside the app.
 

@@ -35,4 +35,48 @@ struct ScenarioDefinitionTests {
             try invalid.validated()
         }
     }
+
+    @Test
+    func responseTempoPreservesOnlyTheFirstOccurrence() {
+        var tempo = ResponseTempo()
+
+        let recordedFirstOccurrence = tempo.mark(.firstAssessment, at: 18)
+        let recordedDuplicate = tempo.mark(.firstAssessment, at: 42)
+
+        #expect(recordedFirstOccurrence)
+        #expect(!recordedDuplicate)
+        #expect(tempo.elapsed(for: .firstAssessment) == 18)
+        #expect(tempo.completedMilestones == [.firstAssessment])
+    }
+
+    @Test
+    func trainingHistoryIsBoundedAndCalculatesProgressMetrics() {
+        var archive = TrainingHistoryArchive()
+        for score in 1...15 {
+            archive.record(
+                TrainingRunSummary(
+                    id: UUID(),
+                    completedAt: Date(timeIntervalSince1970: TimeInterval(score)),
+                    scenarioID: "test",
+                    scenarioVersion: 1,
+                    trainingMode: score.isMultiple(of: 2) ? .assessed : .guided,
+                    scenarioPace: .demo,
+                    exerciseElapsedSeconds: 60,
+                    score: ScoreBreakdown(
+                        safety: min(20, score),
+                        assessment: 0,
+                        triage: 0,
+                        treatment: 0,
+                        communication: 0
+                    ),
+                    responseTempo: ResponseTempo()
+                )
+            )
+        }
+
+        #expect(archive.runs.count == TrainingHistoryArchive.maximumRunCount)
+        #expect(archive.runs.first?.score.total == 15)
+        #expect(archive.personalBest == 15)
+        #expect(archive.averageScore == 10)
+    }
 }

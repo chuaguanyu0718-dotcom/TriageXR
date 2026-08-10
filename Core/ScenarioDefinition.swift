@@ -190,15 +190,17 @@ struct InstructorCasualtyResult: Identifiable, Codable, Equatable, Sendable {
 }
 
 struct InstructorSessionReport: Codable, Equatable, Sendable {
-    static let schemaVersion = 1
+    static let schemaVersion = 2
 
     let schemaVersion: Int
     let scenarioID: String
     let scenarioVersion: Int
     let scenarioTitle: String
+    let trainingMode: TrainingMode
     let scenarioPace: ScenarioPace
     let exerciseElapsedSeconds: TimeInterval
     let score: ScoreBreakdown
+    let responseTempo: ResponseTempo
     let surveyCoveragePercent: Int
     let coveredSurveyBins: [Int]
     let competencies: [InstructorCompetencyResult]

@@ -21,11 +21,14 @@ At the end of a facilitated run, a learner should be able to:
 | Spatial assessment | Tracked hand proximity, required pose, and sustained duration at the current marker |
 | Prioritisation | Scenario tag selected after the primary evidence sequence |
 | Team coordination | Authorised role, command, shared-state result, communication, and simulated coverage duration |
+| Response tempo | First occurrence of selected scenario milestones on the shared exercise clock; no clinical target or pass/fail threshold is inferred |
 | Reflection | Deterministic event citations, consequences, and replay state |
 
 The survey evidence demonstrates deliberate head-direction coverage. It does not measure eye gaze, attention, recognition, or comprehension of objects within a segment. Untracked poses, rapid turns, and steep vertical views do not add coverage.
 
-The 100-point score is deterministic and specific to this fictional exercise. AI coaching may summarise verified events, but it cannot change the score or introduce evidence that was not recorded. The exported instructor report identifies the scenario ID and content version used for the run.
+The 100-point score is deterministic and specific to this fictional exercise. AI coaching may summarise verified events, but it cannot change the score or introduce evidence that was not recorded. The exported instructor report identifies the scenario ID, content version, training mode, and response milestones used for the run. A bounded 12-run summary history remains on the local device; it is a practice trend, not a competency credential.
+
+Guided practice and Assessed run use identical scenario state, evidence rules, and scoring. The modes change only the amount of live prompting and countdown detail shown to the learner. Instructor pause freezes the exercise timeline and releases active simulated treatment holds; it does not edit, erase, or award evidence.
 
 ## Explicitly out of scope
 
@@ -41,6 +44,7 @@ Before using a build with learners, the responsible educator should:
 4. verify survey and hand tracking on the target Vision Pro hardware;
 5. confirm the briefing readiness panel reports the expected device, assets, coach, and incident mode;
 6. brief learners on the simulation boundary and local safety process; and
-7. facilitate a debrief that distinguishes scenario mechanics from real clinical practice and retain the exported report only under the organisation's approved data policy.
+7. confirm the chosen training mode and any instructor pauses are appropriate for the session purpose; and
+8. facilitate a debrief that distinguishes scenario mechanics from real clinical practice and retain exported reports and local run history only under the organisation's approved data policy.
 
 Any future claim that TriageXR teaches a named protocol requires a separate content review, protocol-version record, educator sign-off, and validation study. Until then, the app should continue to describe itself as coordination training.
